@@ -18,9 +18,12 @@ add-apt-repository ppa:zhangsongcui3371/fastfetch -y
 apt-get update -y
 apt-get install fastfetch -y
 
-# Add Fastfetch to .bashrc if not already present
+# Add Fastfetch and nvidia-smi to .bashrc if not already present
 if ! grep -q "fastfetch" ~/.bashrc; then
     echo "fastfetch" >> ~/.bashrc
+fi
+if ! grep -q "nvidia-smi" ~/.bashrc; then
+    echo "nvidia-smi" >> ~/.bashrc
 fi
 
 # --- Install libtinfo5 (CUDA dependency) ---
