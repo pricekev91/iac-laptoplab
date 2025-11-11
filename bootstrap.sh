@@ -8,18 +8,6 @@ exec > >(tee -a "$LOGFILE") 2>&1
 echo "=== Starting Bootstrap Script ==="
 echo "Timestamp: $(date)"
 
-# --- Clone repo and run its bootstrap.sh ---
-REPO_URL="https://github.com/pricekev91/iac-laptoplab-wsl.git"
-WORKDIR="$HOME/iac-laptoplab-wsl"
-
-echo "[0/6] Cloning repo and running its bootstrap..."
-if [ ! -d "$WORKDIR" ]; then
-    git clone "$REPO_URL" "$WORKDIR"
-fi
-cd "$WORKDIR"
-chmod +x bootstrap.sh
-./bootstrap.sh | tee -a "$LOGFILE"
-
 # --- Update & Upgrade ---
 echo "[1/6] Updating system..."
 apt-get update -y && apt-get upgrade -y
