@@ -8,6 +8,18 @@ exec > >(tee -a "$LOGFILE") 2>&1
 echo "=== Starting Bootstrap Script ==="
 echo "Timestamp: $(date)"
 
+# --- Clone repo and run its bootstrap.sh ---
+REPO_URL="https://github.com/pricekev91/iac-laptoplab-wsl.git"
+WORKDIR="$HOME/iac-laptoplab-wsl"
+
+echo "[0/6] Cloning repo and running its bootstrap..."
+if [ ! -d "$WORKDIR" ]; then
+    git clone "$REPO_URL" "$WORKDIR"
+fi
+cd "$WORKDIR"
+chmod +x bootstrap.sh
+./bootstrap.sh | tee -a "$LOGFILE"
+
 # --- Update & Upgrade ---
 echo "[1/6] Updating system..."
 apt-get update -y && apt-get upgrade -y
@@ -18,12 +30,12 @@ add-apt-repository ppa:zhangsongcui3371/fastfetch -y
 apt-get update -y
 apt-get install fastfetch -y
 
-# Add Fastfetch and nvidia-smi to .bashrc if not already present
+# Add Fastfetch and GPU summary to .bashrc if not already present
 if ! grep -q "fastfetch" ~/.bashrc; then
     echo "fastfetch" >> ~/.bashrc
 fi
-if ! grep -q "nvidia-smi" ~/.bashrc; then
-    echo "nvidia-smi" >> ~/.bashrc
+if ! grep -q "nvidia-smi --query-gpu" ~/.bashrc; then
+    echo 'nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader' >> ~/.bashrc
 fi
 
 # --- Install libtinfo5 (CUDA dependency) ---
