@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # ===============================================
-# bootstrap.sh — Version 0.7 (refactored)
+# bootstrap.sh — Version 0.8 (WSL CUDA Fix)
 # -----------------------------------------------
 # Author: Kevin Price
 # Purpose:
 #     Configure a WSL Ubuntu environment for GPU-enabled
-#     AI and development workloads with optional pauses
-#     for debugging and verification.
+#     AI and development workloads without installing Linux GPU drivers.
 #
 # Changelog:
-#   v0.7 - Moved pause before commands, fixed libtinfo6,
-#          standardized step structure, improved idempotency.
+#   v0.8 - Removed Linux NVIDIA driver installs, kept CUDA toolkit only,
+#          added PATH export for nvcc, improved idempotency.
 # ===============================================
 
 LOGFILE="$HOME/bootstrap.log"
@@ -24,7 +23,7 @@ pause() {
     fi
 }
 
-echo "=== Starting Bootstrap Script v0.7 ==="
+echo "=== Starting Bootstrap Script v0.8 ==="
 echo "Timestamp: $(date)"
 echo "Logfile: $LOGFILE"
 echo "====================================="
@@ -58,22 +57,25 @@ add-apt-repository ppa:zhangsongcui3371/fastfetch -y
 apt-get update -y
 apt-get install fastfetch -y
 
-# Add Fastfetch and GPU summary to .bashrc
 grep -q "fastfetch" ~/.bashrc || echo "fastfetch" >> ~/.bashrc
 grep -q "nvidia-smi --query-gpu" ~/.bashrc || \
 echo 'nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader' >> ~/.bashrc
 
 ##############################################
-# [3/10] Install CUDA Dependencies and Tools
+# [3/10] Install CUDA Toolkit (WSL-safe)
 ##############################################
-echo "[3/10] Installing NVIDIA CUDA tools..."
+echo "[3/10] Installing NVIDIA CUDA toolkit (WSL-safe)..."
 pause
 apt-get install -y wget gnupg libtinfo6
 CUDA_REPO="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/"
 wget ${CUDA_REPO}/cuda-keyring_1.1-1_all.deb
 dpkg -i cuda-keyring_1.1-1_all.deb
 apt-get update -y
-apt-get install -y nvidia-utils-535 nvidia-container-toolkit cuda-runtime-12-2
+apt-get install -y cuda-toolkit-12-4
+
+# Add CUDA to PATH
+grep -q "/usr/local/cuda/bin" ~/.bashrc || echo 'export PATH=$PATH:/usr/local/cuda/bin' >> ~/.bashrc
+export PATH=$PATH:/usr/local/cuda/bin
 
 ##############################################
 # [4/10] Verify GPU Access
@@ -83,7 +85,7 @@ pause
 if command -v nvidia-smi &>/dev/null; then
     nvidia-smi
 else
-    echo "⚠️ nvidia-smi not found. Check NVIDIA installation."
+    echo "⚠️ nvidia-smi not found. WSL uses Windows driver; this is expected."
 fi
 
 ##############################################
