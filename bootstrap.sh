@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # ===============================================
-# bootstrap.sh — Version 0.8 (WSL AI + Ollama + WebUI)
+# bootstrap.sh — Version 0.9 (WSL AI + Ollama + WebUI)
 # -----------------------------------------------
-# Author: Kevin Price
+# Author: Kevin Price (Updated)
 # Purpose:
 #     Configure a WSL Ubuntu environment for running
-#     Ollama and other LLMs with GPU support (WSL-safe)
+#     Ollama and OpenWebUI with GPU support (WSL-safe)
+#     Auto-start services and set DeepSeek-R1:1.5b as default model
 #
 # Changelog:
-#   v0.8 - Minimal CUDA runtime only, no dev toolkit
-#          Fixed OpenWebUI typing_extensions issue
-#          Added detailed pause messages per section
+#   v0.9 - Added auto-start for Ollama & OpenWebUI
+#          Persistent Ollama models
+#          Default model: deepseek-r1:1.5b
 # ===============================================
 
 LOGFILE="$HOME/bootstrap.log"
@@ -24,7 +25,7 @@ pause() {
     fi
 }
 
-echo "=== Starting Bootstrap Script v0.8 ==="
+echo "=== Starting Bootstrap Script v0.9 ==="
 echo "Timestamp: $(date)"
 echo "Logfile: $LOGFILE"
 echo "====================================="
@@ -121,12 +122,16 @@ echo "[7/10] Installing Ollama CLI..."
 pause
 curl -fsSL https://ollama.com/install.sh | sh
 
+# Persistent Ollama data
+export OLLAMA_HOME="$HOME/.ollama"
+grep -q "OLLAMA_HOME" ~/.bashrc || echo 'export OLLAMA_HOME="$HOME/.ollama"' >> ~/.bashrc
+
 echo "Starting Ollama service..."
 nohup ollama serve > /var/log/ollama.log 2>&1 &
 sleep 5
 
-echo "Verifying Ollama API..."
-curl -s http://localhost:11434/api/tags || echo "⚠️ Ollama may not be running yet."
+echo "Pulling default Ollama model (deepseek-r1:1.5b)..."
+ollama pull deepseek-r1:1.5b
 
 ##############################################
 # [8/10] Install OpenWebUI
@@ -146,19 +151,37 @@ nohup open-webui serve --host 0.0.0.0 --port 8080 --ollama-base-url http://local
 sleep 5
 
 ##############################################
-# [9/10] Cleanup
+# [9/10] Auto-start Ollama & OpenWebUI on WSL launch
 ##############################################
-echo "[9/10] Cleaning up..."
+echo "[9/10] Adding auto-start for Ollama and OpenWebUI..."
+pause
+cat << 'EOF' >> ~/.bashrc
+
+# Auto-start Ollama and OpenWebUI
+if ! pgrep -f "ollama serve" > /dev/null; then
+    nohup ollama serve > /var/log/ollama.log 2>&1 &
+fi
+
+if ! pgrep -f "open-webui serve" > /dev/null; then
+    nohup open-webui serve --host 0.0.0.0 --port 8080 --ollama-base-url http://localhost:11434 \
+    > /var/log/openwebui.log 2>&1 &
+fi
+EOF
+
+##############################################
+# [10/10] Cleanup
+##############################################
+echo "[10/10] Cleaning up..."
 pause
 apt-get autoremove -y && apt-get clean
 
 ##############################################
-# [10/10] Final Notes
+# Final Notes
 ##############################################
-echo "[10/10] Bootstrap Completed Successfully!"
-pause
 echo "==============================================="
+echo "✅ Bootstrap Completed Successfully!"
 echo "✅ Access OpenWebUI at: http://<your-ip>:8080"
+echo "✅ Default model: deepseek-r1:1.5b"
 echo "✅ Log saved to $LOGFILE"
 echo "Run 'wsl --shutdown' in PowerShell to apply /etc/wsl.conf changes."
 echo "==============================================="
