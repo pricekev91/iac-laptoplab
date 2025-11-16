@@ -20,7 +20,7 @@ pause() {
 }
 
 log "-----------------------------------------"
-lop "WSL Bootstrap v1.3 Starting..."
+log "WSL Bootstrap v1.3 Starting..."
 log "-----------------------------------------"
 
 ### 1️⃣ UPDATE SYSTEM ###
