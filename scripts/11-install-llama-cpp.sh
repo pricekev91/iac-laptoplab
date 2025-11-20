@@ -55,26 +55,4 @@ if [[ "$GPU_TYPE" == "nvidia" && "$CUDA_AVAILABLE" == true ]]; then
     log "Building llama.cpp with CUDA support..."
     CMAKE_FLAGS="-DLLAMA_ENABLE_GPU=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
 elif [[ "$GPU_TYPE" == "intel" ]]; then
-    log "Building llama.cpp for CPU (Intel optimized)..."
-elif [[ "$GPU_TYPE" == "amd" ]]; then
-    log "Building llama.cpp for CPU (AMD optimized)..."
-else
-    log "No GPU detected or CUDA unavailable. Building CPU-only version..."
-fi
-
-# Run CMake configuration
-log "Running CMake configure: cmake .. $CMAKE_FLAGS"
-cmake .. $CMAKE_FLAGS >>"$LOG_FILE" 2>&1
-
-# Compile
-log "Compiling..."
-cmake --build . --config Release >>"$LOG_FILE" 2>&1
-
-if [[ $? -eq 0 ]]; then
-    log "llama.cpp built successfully."
-else
-    log "ERROR: Build failed. Check log file $LOG_FILE."
-    exit 1
-fi
-
-# Opti
+    log
