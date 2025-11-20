@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# 11-install-llama-cpp.sh
-# Install and build llama.cpp for CPU or GPU based on detection script.
+# 11-install-llama-cpp.sh — Version 0.1
+# Author: Kevin Price
+# Last Updated: 2025-11-20
+#
+# Purpose:
+#   Install and build llama.cpp for CPU or GPU based on detection script.
+#
+# Changelog:
+#   v0.1 — Initial CMake-based build script, live logging, no interactive pause.
 #
 
 LOG_DIR="/var/log/laptoplab"
@@ -55,4 +62,6 @@ if [[ "$GPU_TYPE" == "nvidia" && "$CUDA_AVAILABLE" == true ]]; then
     log "Building llama.cpp with CUDA support..."
     CMAKE_FLAGS="-DLLAMA_ENABLE_GPU=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
 elif [[ "$GPU_TYPE" == "intel" ]]; then
-    log
+    log "Building llama.cpp for CPU (Intel optimized)..."
+elif [[ "$GPU_TYPE" == "amd" ]]; then
+    log "Buil
