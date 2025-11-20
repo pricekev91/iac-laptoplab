@@ -1,189 +1,107 @@
-Below is a **fully updated README.md** that keeps everything from your original version, **adds the new IaC structure**, **explains the LLM engine support**, and **maintains professional formatting**.
+Automated, modular, versioned provisioning system for building a complete LLM development environment on Ubuntu inside WSL2.
+This repository uses a branch-per-feature workflow and modular Bash scripts to keep the system clean, debuggable, and easy to maintain.
 
-You can paste this **directly into your repo**.
-
----
-
-# **README.md**
-
-# WSL Lab & Linux LLM Environment Setup
-
-This repository contains Infrastructure-as-Code (IaC) scripts used to provision two environments:
-
-1. **WSL2-based Ubuntu environment on Windows 11**
-2. **Native Linux environment for LLM engines (Ollama / llama.cpp) + OpenWebUI**
-
-The goal is to automate GPU-capable setups for development, testing, and homelab workloads using a modular, versioned, Git-driven workflow.
-
----
-
-# 📦 Components
-
-## **1. Windows / WSL2 Provisioning**
-
-### `WSL-provision.ps1`
-
-This PowerShell script:
-
-* Imports a compressed Ubuntu rootfs (`ubuntu-24.04.3-wsl-amd64.gz`) as a WSL2 instance named `Ubuntu-MKI`
-* Detects if the instance exists, and prompts before replacing it
-* Sets the new distro as the default WSL instance
-* Follows IaC principles for OS lifecycle management
-
-### `bootstrap.sh`
-
-Run inside the WSL instance. It:
-
-* Updates and upgrades the system
-* Installs **fastfetch** for system summary display at login
-* Adds fastfetch to `.bashrc`
-* Installs `libtinfo5` manually (fix for CUDA apps)
-* Installs NVIDIA CLI tools + CUDA runtime
-* Verifies GPU support with `nvidia-smi`
-* Logs all actions to `~/bootstrap.log`
-
----
-
-# **2. Linux LLM Provisioning**
-
-Under `iac-laptoplab/` you will find modular scripts that install:
-
-* **Ollama** (CPU, NVIDIA CUDA, or AMD ROCm)
-* **llama.cpp** with correct GPU flags
-* **OpenWebUI** via Docker
-* Post-setup Ubuntu tooling (htop, neofetch, git, etc.)
-
-This part of the repo uses a **Git feature-branch model**:
-
-| Branch                     | Purpose                                        |
-| -------------------------- | ---------------------------------------------- |
-| `feature/llm_engine`       | GPU detection, Ollama install, llama.cpp build |
-| `feature/openwebui`        | OpenWebUI install + model configuration        |
-| `feature/ubuntu_provision` | Post-setup tooling + quality-of-life configs   |
-| `main`                     | Orchestrator + stable releases                 |
-
----
-
-# 📁 Repo Structure
-
-```
-iac-laptoplab/
+🧱 Repository Layout
+iac-laptoplab-wsl/
 │
-├── main.sh                          # Orchestrator (runs all scripts)
+├── bootstrap.sh
+├── README.md
 │
-└── scripts/
-    ├── 00-detect-gpu.sh            # feature/llm_engine
-    ├── 10-install-ollama.sh        # feature/llm_engine
-    ├── 11-install-llama-cpp.sh     # feature/llm_engine
-    ├── 20-install-openwebui.sh     # feature/openwebui
-    ├── 30-config-openwebui.sh      # feature/openwebui
-    └── 40-post-setup.sh            # feature/ubuntu_provision
-```
+├── scripts/
+│   ├── 00-detect-gpu.sh
+│   ├── 10-install-ollama.sh
+│   ├── 11-install-llama-cpp.sh
+│   ├── 20-install-openwebui.sh
+│   ├── 30-config-openwebui.sh
+│   └── 40-post-setup.sh
+│
+└── wsl-provision.ps1
 
-The Linux provisioning is intentionally modular to make it easier to test, version, and expand.
+🌿 Branch Workflow (Feature Branches)
 
----
+Each module/script lives in its own feature branch:
 
-# 🚀 Usage
+Branch	Purpose	Script
+feature/detect-gpu	GPU detection & CUDA compatibility	00-detect-gpu.sh
+feature/ollama	Install Ollama + Nvidia CUDA support	10-install-ollama.sh
+feature/llm_engine	llama.cpp installation	11-install-llama-cpp.sh
+feature/openwebui-install	Install OpenWebUI	20-install-openwebui.sh
+feature/openwebui-config	OpenWebUI config	30-config-openwebui.sh
+feature/post-setup	Finalization, validation, cleanup	40-post-setup.sh
+main	Stable release	All scripts merged after validation
+🚀 Running the Provisioner (Windows PowerShell)
 
-## **1. Clone the Repo**
+WSL cannot be provisioned using restricted PowerShell execution policies.
+To safely run the WSL provisioning script without permanently lowering security, use:
 
-```powershell
-git clone https://github.com/pricekev/iac-laptoplab-wsl.git
-cd iac-laptoplab-wsl
-```
+powershell -ExecutionPolicy Bypass -File "C:\Users\price\iac-laptoplab-wsl\wsl-provision.ps1"
 
----
 
-## **2. Provision the WSL Instance**
+This does not change your system’s global policy—only for this single run.
+This is required because Windows defaults to not allowing unsigned scripts, and that is the correct security posture.
 
-```powershell
-.\WSL-provision.ps1
-```
+🐧 Running the Linux Bootstrap (Inside WSL Ubuntu)
 
----
+After the Windows-side provisioning, WSL will launch Ubuntu.
+Then run:
 
-## **3. Enter WSL and Bootstrap**
+chmod +x bootstrap.sh
+./bootstrap.sh
 
-```bash
-bash bootstrap.sh
-```
 
----
+The bootstrap script will automatically:
 
-## **4. (Linux) Run the LLM Orchestrator**
+Detect GPU and check for CUDA
 
-If running on Ubuntu outside of WSL:
+Install Ollama (Nvidia-enabled)
 
-```bash
-cd iac-laptoplab
-bash main.sh
-```
+Install llama.cpp
 
-This:
+Install OpenWebUI
 
-* Detects NVIDIA / AMD / CPU
-* Installs Ollama
-* Builds llama.cpp with correct GPU backend
-* Installs OpenWebUI via Docker
-* Sets a default model
-* Applies post-setup system config
+Configure OpenWebUI
 
----
+Run post-setup validation
 
-# 🧭 Current Features
+Each step pauses so you can confirm progress and check logs.
 
-### WSL Environment
+🧩 Script Execution Order
 
-* Automated WSL2 instance deployment
-* GPU enablement via NVIDIA tools
-* Automatic system info via fastfetch
-* Logged bootstrap process
+Bootstrap runs everything in this order:
 
-### Linux LLM Environment
+scripts/00-detect-gpu.sh
+scripts/10-install-ollama.sh
+scripts/11-install-llama-cpp.sh
+scripts/20-install-openwebui.sh
+scripts/30-config-openwebui.sh
+scripts/40-post-setup.sh
 
-* GPU autodetection (NVIDIA / AMD / CPU fallback)
-* Easy Ollama install
-* GPU-optimized llama.cpp build
-* OpenWebUI with Docker
-* Default model auto-loaded
-* Modular IaC folder structure
 
----
+Each script is independently testable and lives in a Git feature branch.
 
-# 🔮 Future Roadmap
+🪵 Logs
 
-* Add snapshot automation for WSL (`wsl --export` / `--import`)
-* Add versioning (v0.1 → v0.2 → v0.3…) following semantic releases
-* Add Proxmox automation scripts for homelab
-* Add cloud-init templates for VM builds
-* Add GitHub Actions for linting + test execution
-* Add verification script for GPU performance
+All logs are written under:
 
----
+/var/log/laptoplab/
 
-# 🛠️ Requirements
 
-* Windows 11 with WSL2 enabled (for WSL portion)
-* Ubuntu Linux (for LLM engine portion)
-* NVIDIA GPU or AMD GPU recommended
-* Git
-* PowerShell 7+
+Each script writes its own log for easy debugging.
 
----
+🔧 Requirements
 
-# 📬 Contact
+Windows 10/11 with WSL2 enabled
 
-For questions, issues, or enhancements:
-Open a GitHub Issue or start a Discussion.
+Nvidia GPU + drivers (optional but recommended)
 
----
+Ubuntu WSL instance
 
-If you want, I can also generate:
+At least 16 GB RAM recommended for LLMs
 
-✔ `CHANGELOG.md`
-✔ Version tags (v0.1 → v0.2)
-✔ GitHub Actions CI pipeline
-✔ Branch-creation commands
+📌 Notes
 
-Just say **“Generate CHANGELOG”**, **“Add CI actions”**, or **“Create release tags”**.
+All installers are from official sources (Ollama, llama.cpp, OpenWebUI)
+
+No dependencies are downloaded from HuggingFace unless explicitly configured
+
+Branch-based workflow keeps each feature tested and isolated
