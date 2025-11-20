@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 #
-# 11-install-llama-cpp.sh — Version 0.32
+# 11-install-llama-cpp.sh — Version 0.33
 # Author: Kevin Price
 # Last Updated: 2025-11-20
 #
 # Purpose:
 #   Install llama.cpp to /opt/llama.cpp with CPU/GPU detection and automatic build.
-#   Logs to /opt/llama.cpp/logs/llama-cpp-install.log
+#   Logs to /opt/llama-cpp-install.log
 #
 
 INSTALL_DIR="/opt/llama.cpp"
-LOG_DIR="$INSTALL_DIR/logs"
-LOG_FILE="$LOG_DIR/llama-cpp-install.log"
+LOG_FILE="/opt/llama-cpp-install.log"
 
-# Ensure log directory exists
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
+# Ensure log file exists
+sudo touch "$LOG_FILE"
+sudo chown $(whoami):$(whoami) "$LOG_FILE"
 
 log() { echo "$(date +"%Y-%m-%d %H:%M:%S") [LLAMA-C++] $1" | tee -a "$LOG_FILE"; }
 
@@ -45,10 +44,9 @@ if [[ -d "$INSTALL_DIR" ]]; then
     sudo rm -rf "$INSTALL_DIR"
 fi
 
-# Recreate directories
-log "Creating installation and log directories..."
-sudo mkdir -p "$LOG_DIR"
-sudo touch "$LOG_FILE"
+# Recreate install directory
+log "Creating installation directory..."
+sudo mkdir -p "$INSTALL_DIR"
 sudo chown -R $(whoami):$(whoami) "$INSTALL_DIR"
 
 # Clone llama.cpp
