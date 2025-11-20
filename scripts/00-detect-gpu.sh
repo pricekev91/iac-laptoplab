@@ -1,52 +1,50 @@
 #!/usr/bin/env bash
-#
-# 00-detect-gpu.sh — Version 0.1
-# Author: Kevin Price
-# Last Updated: 2025-11-20
-#
-# Purpose:
-#   Automatically detect GPU type and CUDA availability.
-#   Sets and exports:
-#     GPU_TYPE       = "nvidia", "intel", "amd", or "cpu"
-#     CUDA_AVAILABLE = true/false
-#     WSL_DETECTED   = true/false
-#
+# 00-detect-gpu.sh — v0.2
+# Detects available GPU type and prints result for use by installer scripts.
+# Updated to assume installation and runtime location under /opt.
 
-GPU_TYPE="cpu"
-CUDA_AVAILABLE=false
-WSL_DETECTED=false
+set -euo pipefail
 
-# Detect NVIDIA GPU
+SCRIPT_DIR="/opt/ai-setup"
+LOG_FILE="${SCRIPT_DIR}/gpu-detect.log"
+
+mkdir -p "$SCRIPT_DIR"
+touch "$LOG_FILE"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" | tee -a "$LOG_FILE"
+}
+
+log "=== GPU Detection Script v0.2 Starting ==="
+
+# Detect NVIDIA
 if command -v nvidia-smi >/dev/null 2>&1; then
-    if [[ $(nvidia-smi -L 2>/dev/null | wc -l) -gt 0 ]]; then
-        GPU_TYPE="nvidia"
-        # Check for CUDA compiler
-        if command -v nvcc >/dev/null 2>&1; then
-            CUDA_AVAILABLE=true
-        fi
+    if nvidia-smi >/dev/null 2>&1; then
+        log "Detected NVIDIA GPU via nvidia-smi."
+        echo "nvidia"
+        exit 0
     fi
 fi
 
-# Detect Intel GPU
-if [[ "$GPU_TYPE" == "cpu" ]] && command -v lspci >/dev/null 2>&1; then
-    lspci | grep -iq 'intel.*graphics' && GPU_TYPE="intel"
+# Detect AMD ROCm
+if command -v rocminfo >/dev/null 2>&1; then
+    if rocminfo >/dev/null 2>&1; then
+        log "Detected AMD GPU via rocminfo."
+        echo "amd"
+        exit 0
+    fi
 fi
 
-# Detect AMD GPU
-if [[ "$GPU_TYPE" == "cpu" ]] && command -v lspci >/dev/null 2>&1; then
-    lspci | grep -iqE 'amd.*vga|radeon|vega' && GPU_TYPE="amd"
+# Detect Intel iGPU (via lspci)
+if command -v lspci >/dev/null 2>&1; then
+    if lspci | grep -i 'vga' | grep -qi 'intel'; then
+        log "Detected Intel integrated GPU via lspci."
+        echo "intel"
+        exit 0
+    fi
 fi
 
-# Detect WSL
-grep -qi microsoft /proc/version 2>/dev/null && WSL_DETECTED=true
-
-# Print summary
-echo "-------------------------------------"
-echo "[GPU-DETECT] GPU detection complete:"
-echo "[GPU-DETECT]   GPU_TYPE:       $GPU_TYPE"
-echo "[GPU-DETECT]   CUDA_AVAILABLE: $CUDA_AVAILABLE"
-echo "[GPU-DETECT]   WSL_DETECTED:   $WSL_DETECTED"
-echo "-------------------------------------"
-
-# Export variables
-export GPU_TYPE CUDA_AVAILABLE WSL_DETECTED
+# No GPU
+log "No supported GPU detected."
+echo "cpu"
+exit 0
