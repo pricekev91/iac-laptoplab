@@ -1,50 +1,64 @@
 #!/usr/bin/env bash
-# 00-detect-gpu.sh — v0.2
-# Detects available GPU type and prints result for use by installer scripts.
-# Updated to assume installation and runtime location under /opt.
+#
+# 00-detect-gpu.sh — Version 0.2
+# Author: Kevin Price
+# Last Updated: 2025-11-20
+#
+# Purpose:
+#   Automatically detect GPU type and CUDA availability.
+#   Sets:
+#     GPU_TYPE       = "nvidia", "intel", "amd", or "cpu"
+#     CUDA_AVAILABLE = true/false
+#     WSL_DETECTED   = true/false
+#
 
-set -euo pipefail
+GPU_TYPE="cpu"
+CUDA_AVAILABLE=false
 
-SCRIPT_DIR="/opt/ai-setup"
-LOG_FILE="${SCRIPT_DIR}/gpu-detect.log"
-
-mkdir -p "$SCRIPT_DIR"
-touch "$LOG_FILE"
-
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" | tee -a "$LOG_FILE"
-}
-
-log "=== GPU Detection Script v0.2 Starting ==="
-
-# Detect NVIDIA
+# Detect NVIDIA GPU
 if command -v nvidia-smi >/dev/null 2>&1; then
-    if nvidia-smi >/dev/null 2>&1; then
-        log "Detected NVIDIA GPU via nvidia-smi."
-        echo "nvidia"
-        exit 0
+    NVIDIA_COUNT=$(nvidia-smi -L 2>/dev/null | wc -l)
+    if [[ $NVIDIA_COUNT -gt 0 ]]; then
+        GPU_TYPE="nvidia"
+        # Check if CUDA is installed
+        if command -v nvcc >/dev/null 2>&1; then
+            CUDA_AVAILABLE=true
+        else
+            CUDA_AVAILABLE=false
+        fi
     fi
 fi
 
-# Detect AMD ROCm
-if command -v rocminfo >/dev/null 2>&1; then
-    if rocminfo >/dev/null 2>&1; then
-        log "Detected AMD GPU via rocminfo."
-        echo "amd"
-        exit 0
+# Detect Intel GPU (primarily integrated graphics)
+if [[ "$GPU_TYPE" == "cpu" ]] && command -v lspci >/dev/null 2>&1; then
+    if lspci | grep -i 'intel.*graphics' >/dev/null 2>&1; then
+        GPU_TYPE="intel"
     fi
 fi
 
-# Detect Intel iGPU (via lspci)
-if command -v lspci >/dev/null 2>&1; then
-    if lspci | grep -i 'vga' | grep -qi 'intel'; then
-        log "Detected Intel integrated GPU via lspci."
-        echo "intel"
-        exit 0
+# Detect AMD GPU
+if [[ "$GPU_TYPE" == "cpu" ]] && command -v lspci >/dev/null 2>&1; then
+    if lspci | grep -i 'amd.*vga\|radeon\|vega' >/dev/null 2>&1; then
+        GPU_TYPE="amd"
     fi
 fi
 
-# No GPU
-log "No supported GPU detected."
-echo "cpu"
-exit 0
+# Environment check for WSL
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    WSL_DETECTED=true
+else
+    WSL_DETECTED=false
+fi
+
+# Summary
+echo "-------------------------------------"
+echo "[GPU-DETECT] GPU detection complete:"
+echo "[GPU-DETECT]   GPU_TYPE:       $GPU_TYPE"
+echo "[GPU-DETECT]   CUDA_AVAILABLE: $CUDA_AVAILABLE"
+echo "[GPU-DETECT]   WSL_DETECTED:   $WSL_DETECTED"
+echo "-------------------------------------"
+
+# Export variables so sourcing script can use them
+export GPU_TYPE
+export CUDA_AVAILABLE
+export WSL_DETECTED
