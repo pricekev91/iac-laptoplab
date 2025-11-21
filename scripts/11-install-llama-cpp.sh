@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
-# 11-install-llama-cpp.sh — Version 0.33
+# 11-install-llama-cpp.sh — Version 0.34
 # Author: Kevin Price
 # Last Updated: 2025-11-20
 #
 # Purpose:
 #   Install llama.cpp to /opt/llama.cpp with CPU/GPU detection and automatic build.
+#   Add PATH and alias so 'llama' is globally available.
 #   Logs to /opt/llama-cpp-install.log
 #
 
 INSTALL_DIR="/opt/llama.cpp"
 LOG_FILE="/opt/llama-cpp-install.log"
+PROFILE="$HOME/.bashrc"  # for Linux/WSL users
 
 # Ensure log file exists
 sudo touch "$LOG_FILE"
@@ -89,4 +91,23 @@ else
     log "WARNING: main executable not found or not runnable."
 fi
 
+# --- PATH and alias fix for global usage ---
+PATH_LINE="export PATH=\$PATH:$INSTALL_DIR/build"
+ALIAS_LINE="alias llama='llama-cli'"
+
+if ! grep -Fxq "$PATH_LINE" "$PROFILE"; then
+    echo "" >> "$PROFILE"
+    echo "# Added by 11-install-llama-cpp.sh: llama.cpp CLI" >> "$PROFILE"
+    echo "$PATH_LINE" >> "$PROFILE"
+fi
+
+if ! grep -Fxq "$ALIAS_LINE" "$PROFILE"; then
+    echo "$ALIAS_LINE" >> "$PROFILE"
+fi
+
+# Apply to current shell immediately
+export PATH=$PATH:$INSTALL_DIR/build
+alias llama='llama-cli'
+
 log "llama.cpp installation completed."
+log "You can now run 'llama --help' from any terminal. (Run 'source ~/.bashrc' if new terminal doesn't see it.)"
