@@ -73,7 +73,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
         apt-get update
         
         # Install CUDA runtime only (not full dev toolkit)
-        apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6
+        apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 libcublas-12-6 libcublas-dev-12-6
         
         # Set CUDA paths
         echo 'export PATH=/usr/local/cuda/bin:$PATH' >> "$PROFILE"
