@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
 #
-# 11-install-llama-openwebui.sh — Version 0.44
+# 11-install-llama-openwebui.sh — Version 0.45
 # Author: Kevin Price
 # Updated: 2025-11-24
 #
 # Purpose:
-#   Full AI Appliance installer for llama.cpp + OpenWebUI.
+#   Bootstrap installer for llama.cpp + OpenWebUI on laptop hardware.
 #   - Installs llama.cpp to /opt/llama.cpp
 #   - Builds CUDA if available, else CPU
-#   - Installs llama-server systemd service
-#   - Installs OpenWebUI as venv service
-#   - Downloads Meta-Llama-3-8B.gguf using HuggingFace CLI
+#   - Prompts user to recompile if binary exists
+#   - Downloads public Meta-Llama-3-8B.gguf model
 #
 
 set -euo pipefail
 
-SCRIPT_VERSION="0.44"
+SCRIPT_VERSION="0.45"
 LOG_FILE="/opt/llama-install.log"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "============================================================"
-echo "AI Appliance Installer (llama.cpp + OpenWebUI) v$SCRIPT_VERSION"
+echo "AI Appliance Bootstrap Installer v$SCRIPT_VERSION"
 echo "============================================================"
 
 # --------------------------------------------------------
@@ -61,7 +60,7 @@ apt-get install -y \
     wget curl libomp-dev pkg-config libcurl4-openssl-dev
 
 # --------------------------------------------------------
-# Install CUDA runtime (lightweight) if NVIDIA GPU present
+# Install CUDA runtime if NVIDIA GPU present
 # --------------------------------------------------------
 GPU_TYPE="cpu"
 CUDA_AVAILABLE=false
@@ -84,48 +83,59 @@ if command -v nvidia-smi >/dev/null 2>&1; then
         GPU_TYPE="nvidia"
         CUDA_AVAILABLE=true
         echo "✓ CUDA toolkit found - will build with GPU acceleration"
-    else
-        echo "⚠ CUDA toolkit missing. Falling back to CPU build"
     fi
 else
     echo "No NVIDIA GPU detected - building CPU-only version"
 fi
 
 # --------------------------------------------------------
-# Remove previous install
+# Check for existing llama.cpp binary
 # --------------------------------------------------------
-echo "=== Removing old llama.cpp (if any) ==="
-rm -rf "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
+LLAMA_BIN="$INSTALL_DIR/build/bin/llama-cli"
 
-# --------------------------------------------------------
-# Clone llama.cpp
-# --------------------------------------------------------
-echo "=== Cloning llama.cpp ==="
-git clone https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
-
-# --------------------------------------------------------
-# Build llama.cpp
-# --------------------------------------------------------
-echo "=== Building llama.cpp ==="
-cd "$INSTALL_DIR"
-mkdir -p build
-cd build
-
-CMAKE_FLAGS="-DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release"
-
-if [[ "$CUDA_AVAILABLE" == true ]]; then
-    echo "Building with CUDA support..."
-    CMAKE_FLAGS="$CMAKE_FLAGS -DLLAMA_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
+RECOMPILE=false
+if [[ -f "$LLAMA_BIN" ]]; then
+    BUILD_DATE=$(date -r "$LLAMA_BIN" "+%Y-%m-%d %H:%M:%S")
+    read -p "Compiled llama.cpp found (built on $BUILD_DATE). Recompile? [y/N]: " RESP
+    if [[ "$RESP" =~ ^[Yy]$ ]]; then
+        RECOMPILE=true
+        echo "✓ Will recompile llama.cpp"
+    else
+        echo "✓ Keeping existing binary"
+    fi
 else
-    echo "Building CPU-only version..."
-    CMAKE_FLAGS="$CMAKE_FLAGS -DLLAMA_CUDA=OFF"
+    RECOMPILE=true
 fi
 
-cmake .. $CMAKE_FLAGS
-cmake --build . --config Release -j"$(nproc)"
+# --------------------------------------------------------
+# Clone / Build llama.cpp
+# --------------------------------------------------------
+if [[ "$RECOMPILE" == true ]]; then
+    echo "=== Removing old llama.cpp (if any) ==="
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
 
-echo "llama.cpp build complete."
+    echo "=== Cloning llama.cpp ==="
+    git clone https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
+
+    echo "=== Building llama.cpp ==="
+    cd "$INSTALL_DIR"
+    mkdir -p build
+    cd build
+
+    CMAKE_FLAGS="-DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release"
+    if [[ "$CUDA_AVAILABLE" == true ]]; then
+        echo "Building with CUDA support..."
+        CMAKE_FLAGS="$CMAKE_FLAGS -DLLAMA_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc"
+    else
+        echo "Building CPU-only version..."
+        CMAKE_FLAGS="$CMAKE_FLAGS -DLLAMA_CUDA=OFF"
+    fi
+
+    cmake .. $CMAKE_FLAGS
+    cmake --build . --config Release -j"$(nproc)"
+    echo "llama.cpp build complete."
+fi
 
 # --------------------------------------------------------
 # Ensure binaries on PATH
@@ -138,35 +148,24 @@ ln -sf "$INSTALL_DIR/build/bin/llama-server" /usr/local/bin/llama-server
 ln -sf "$INSTALL_DIR/build/bin/llama-cli" /usr/local/bin/llama
 
 # --------------------------------------------------------
-# Install HuggingFace CLI via pip
+# Install HuggingFace CLI
 # --------------------------------------------------------
 echo "=== Installing HuggingFace CLI ==="
 pip3 install --break-system-packages --upgrade huggingface-hub
 
-# Detect HuggingFace CLI executable
-HF_CLI=$(command -v hf || command -v huggingface || command -v huggingface-cli || true)
+HF_CLI=$(command -v hf || true)
 if [[ -z "$HF_CLI" ]]; then
     echo "ERROR: HuggingFace CLI not found. Install via: pip3 install huggingface-hub"
     exit 1
 fi
 
 # --------------------------------------------------------
-# Download model
+# Download public model
 # --------------------------------------------------------
 echo "=== Checking for model: $MODEL_FILE ==="
 if [[ ! -f "$MODEL_FILE" ]]; then
-    echo "Model not found. Downloading via HuggingFace CLI..."
-    if [[ -n "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
-        export HUGGINGFACE_HUB_TOKEN="${HUGGINGFACE_HUB_TOKEN}"
-        echo "Using HuggingFace token."
-    else
-        echo "WARNING: No HuggingFace token set — public models only."
-    fi
-
-    $HF_CLI download meta-llama/Meta-Llama-3-8B \
-        --include "*.gguf" \
-        --local-dir "$MODEL_DIR" \
-        --local-dir-use-symlinks False
+    echo "Model not found. Downloading public Meta-Llama-3-8B.gguf..."
+    $HF_CLI download meta-llama/Meta-Llama-3-8B --include "*.gguf" --local-dir "$MODEL_DIR"
 
     if [[ -f "$MODEL_FILE" ]]; then
         echo "Model downloaded successfully: $MODEL_FILE"
@@ -250,7 +249,7 @@ systemctl enable --now openwebui.service
 # Finished
 # --------------------------------------------------------
 echo "============================================================"
-echo "AI Appliance Installation Complete!"
+echo "Bootstrap Installation Complete!"
 echo "Version: $SCRIPT_VERSION"
 echo
 echo "llama-server running on:  http://localhost:8081"
