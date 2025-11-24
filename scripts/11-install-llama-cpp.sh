@@ -38,7 +38,8 @@ apt-get update
 apt-get install -y \
     git cmake build-essential \
     python3 python3-pip python3-venv python3-full \
-    curl wget unzip
+    curl wget unzip \
+    libcurl4-openssl-dev pkg-config
 
 ###############################################
 # Install CUDA runtime for GPU acceleration
