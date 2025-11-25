@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#!/usr/bin/env bash
 # ============================================================
 #  WSL2 AI Appliance Installer — v0.50
 #  Author: Kevin Price — 2025-11-24
