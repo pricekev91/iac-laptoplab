@@ -1,10 +1,43 @@
 #!/usr/bin/env bash
+#!/usr/bin/env bash
+# ============================================================
+#  WSL2 AI Appliance Installer — v0.50
+#  Author: Kevin Price — 2025-11-24
 #
-# WSL2 AI Appliance Installer — Version 0.50
-# Author: Kevin Price
-# Updated: 2025-11-24
+#  === AI-EDITING RULES (READ BEFORE CHANGES) ===
 #
-# Installs llama.cpp + OpenWebUI with CUDA support for RTX 2060M
+#  • Do NOT rewrite or refactor the full script.
+#    Only modify sections I explicitly request.
+#
+#  • When update the entire script increment the script version .001 unless otherwise requested.
+#
+#  • Keep the script VERBOSE (IAC style):
+#    preserve comments, logging, echoes, structure.
+#
+#  • Maintain compatibility with:
+#    Bash 5+, Ubuntu/WSL2, llama.cpp master, OpenWebUI.
+#
+#  • Do NOT remove: safety checks, dependency installs,
+#    GPU detection, systemd service creation.
+#
+#  • When adding code:
+#      - use clear comments
+#      - follow existing style/indentation
+#      - use defensive scripting
+#
+#  • Do NOT change variables/paths/defaults unless I ask.
+#
+#  • Output must be DROP-IN SAFE:
+#      no placeholders, no partial examples.
+#
+#  === PROMPT HANDLING ===
+#  Assume I paste back a modified full script.
+#  Integrate only requested changes.
+#
+#  === OUTPUT RULE ===
+#  Only output the changed section(s),
+#  unless I explicitly request the entire script.
+# ============================================================
 
 set -e
 
