@@ -1,5 +1,5 @@
 # ============================================================
-#  wsl-bootstrapsh  — v0.12
+#  wsl-bootstrap.sh  — v0.13
 #  Author: Kevin Price — 2025-11-24
 #
 #  === AI-EDITING RULES (READ BEFORE CHANGES) ===
@@ -7,7 +7,7 @@
 #  • Do NOT rewrite or refactor the full script.
 #    Only modify sections I explicitly request.
 #
-#  • When update the entire script increment the script version .001 unless otherwise requested.
+#  • When updating the entire script increment the script version .001 unless otherwise requested.
 #
 #  • Keep the script VERBOSE (IAC style):
 #    preserve comments, logging, echoes, structure.
@@ -44,7 +44,8 @@ set -e
 ###############################################
 # CONFIGURATION
 ###############################################
-MODEL_REPO="Qwen/Qwen-2.5-Coder-7B-GGUF"
+MODEL_REPO="Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+MODEL_FILE="qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 MODEL_INSTALL_DIR="/opt/ai-models"
 
 ###############################################
@@ -57,13 +58,7 @@ apt update -y
 # 1. Install prerequisites
 ###############################################
 echo "=== Installing prerequisites ==="
-apt install -y wget btop python3 python3-venv python3-pip git curl pipx
-
-# Ensure pipx bin is on PATH for this session
-export PATH="$PATH:/root/.local/bin"
-if ! grep -q "/root/.local/bin" /root/.bashrc; then
-    echo 'export PATH="$PATH:/root/.local/bin"' >> /root/.bashrc
-fi
+apt install -y wget btop python3 python3-venv python3-pip git curl
 
 ###############################################
 # 2. Install Fastfetch
@@ -95,32 +90,37 @@ if [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.bashrc" ]; then
 fi
 
 ###############################################
-# 4. Install Hugging Face Hub CLI via pipx
-###############################################
-echo "=== Installing Hugging Face Hub CLI (hf) via pipx ==="
-pipx install --force huggingface_hub
-
-# Ensure hf CLI is on PATH
-export PATH="$PATH:/root/.local/bin"
-
-###############################################
-# 5. Download Qwen 2.5-Coder 7B model (public, no login)
+# 4. Download Qwen 2.5-Coder 7B model (public, no login)
 ###############################################
 echo "=== Creating model install directory ==="
 mkdir -p "$MODEL_INSTALL_DIR"
 
-echo "=== Downloading Qwen 2.5-Coder 7B model ==="
+echo "=== Downloading Qwen 2.5-Coder 7B GGUF model ==="
 cd "$MODEL_INSTALL_DIR"
 
-# Public model - no authentication needed
-"$HOME/.local/bin/hf" repo clone "$MODEL_REPO" .
+# Direct download of specific quantized model file
+# Using Q4_K_M (balanced size/quality) - adjust quant level if needed
+MODEL_URL="https://huggingface.co/$MODEL_REPO/resolve/main/$MODEL_FILE"
 
-echo "✓ Model downloaded to $MODEL_INSTALL_DIR"
+if [ -f "$MODEL_FILE" ]; then
+    echo "✓ Model already exists: $MODEL_FILE"
+else
+    echo "Downloading $MODEL_FILE..."
+    curl -L -o "$MODEL_FILE" "$MODEL_URL"
+    
+    if [ -f "$MODEL_FILE" ]; then
+        echo "✓ Model downloaded successfully"
+    else
+        echo "✗ Download failed"
+        exit 1
+    fi
+fi
+
+echo "✓ Model ready at $MODEL_INSTALL_DIR/$MODEL_FILE"
 
 ###############################################
-# 6. Completion message
+# 5. Completion message
 ###############################################
 echo "=== Setup complete! ==="
 echo "Close and reopen your WSL terminal to see Fastfetch on login."
-echo "Hugging Face CLI available at $HOME/.local/bin/hf"
-echo "Qwen 2.5-Coder 7B model installed at $MODEL_INSTALL_DIR"
+echo "Qwen 2.5-Coder 7B model installed at $MODEL_INSTALL_DIR/$MODEL_FILE"
