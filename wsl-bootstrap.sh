@@ -1,5 +1,5 @@
 # ============================================================
-#  wsl-bootstrap.sh  — v0.13
+#  wsl-bootstrap.sh  — v0.14
 #  Author: Kevin Price — 2025-11-24
 #
 #  === AI-EDITING RULES (READ BEFORE CHANGES) ===
@@ -40,13 +40,6 @@
 #!/usr/bin/env bash
 
 set -e
-
-###############################################
-# CONFIGURATION
-###############################################
-MODEL_REPO="Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
-MODEL_FILE="qwen2.5-coder-7b-instruct-q4_k_m.gguf"
-MODEL_INSTALL_DIR="/opt/ai-models"
 
 ###############################################
 # 0. Update package lists
@@ -90,37 +83,7 @@ if [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.bashrc" ]; then
 fi
 
 ###############################################
-# 4. Download Qwen 2.5-Coder 7B model (public, no login)
-###############################################
-echo "=== Creating model install directory ==="
-mkdir -p "$MODEL_INSTALL_DIR"
-
-echo "=== Downloading Qwen 2.5-Coder 7B GGUF model ==="
-cd "$MODEL_INSTALL_DIR"
-
-# Direct download of specific quantized model file
-# Using Q4_K_M (balanced size/quality) - adjust quant level if needed
-MODEL_URL="https://huggingface.co/$MODEL_REPO/resolve/main/$MODEL_FILE"
-
-if [ -f "$MODEL_FILE" ]; then
-    echo "✓ Model already exists: $MODEL_FILE"
-else
-    echo "Downloading $MODEL_FILE..."
-    curl -L -o "$MODEL_FILE" "$MODEL_URL"
-    
-    if [ -f "$MODEL_FILE" ]; then
-        echo "✓ Model downloaded successfully"
-    else
-        echo "✗ Download failed"
-        exit 1
-    fi
-fi
-
-echo "✓ Model ready at $MODEL_INSTALL_DIR/$MODEL_FILE"
-
-###############################################
-# 5. Completion message
+# 4. Completion message
 ###############################################
 echo "=== Setup complete! ==="
 echo "Close and reopen your WSL terminal to see Fastfetch on login."
-echo "Qwen 2.5-Coder 7B model installed at $MODEL_INSTALL_DIR/$MODEL_FILE"
