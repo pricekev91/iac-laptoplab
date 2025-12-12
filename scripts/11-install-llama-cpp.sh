@@ -174,7 +174,6 @@ echo "✓ OpenWebUI installed"
 # Create systemd services
 ###############################################
 echo "=== Creating systemd services ==="
-
 # llama-server service
 cat > /etc/systemd/system/llama-server.service <<EOF
 [Unit]
@@ -187,9 +186,14 @@ ExecStart=/usr/local/bin/llama-server \\
     --model ${MODEL_DIR}/${MODEL_FILE} \\
     --host 0.0.0.0 \\
     --port 8081 \\
-    --n-gpu-layers 999
+    --n-gpu-layers 999 \\
+    --ctx-size 8192 \\
+    --chat-template llama3
 Restart=always
+RestartSec=5
 WorkingDirectory=${MODEL_DIR}
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
