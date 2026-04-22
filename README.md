@@ -1,107 +1,56 @@
-Automated, modular, versioned provisioning system for building a complete LLM development environment on Ubuntu inside WSL2.
-This repository uses a branch-per-feature workflow and modular Bash scripts to keep the system clean, debuggable, and easy to maintain.
+# iac-laptoplab
 
-🧱 Repository Layout
-iac-laptoplab-wsl/
-│
-├── bootstrap.sh
-├── README.md
-│
-├── scripts/
-│   ├── 00-detect-gpu.sh
-│   ├── 10-install-ollama.sh
-│   ├── 11-install-llama-cpp.sh
-│   ├── 20-install-openwebui.sh
-│   ├── 30-config-openwebui.sh
-│   └── 40-post-setup.sh
-│
-└── wsl-provision.ps1
+Infrastructure-as-Code repository for a self-hosted, vendor-agnostic AI appliance built on Linux hosts, LXD system containers, and local model serving.
 
-🌿 Branch Workflow (Feature Branches)
+The previous Windows 11 and WSL-focused implementation has been archived in git and is intentionally not carried forward on `main`.
 
-Each module/script lives in its own feature branch:
+## Current Scope
 
-Branch	Purpose	Script
-feature/detect-gpu	GPU detection & CUDA compatibility	00-detect-gpu.sh
-feature/ollama	Install Ollama + Nvidia CUDA support	10-install-ollama.sh
-feature/llm_engine	llama.cpp installation	11-install-llama-cpp.sh
-feature/openwebui-install	Install OpenWebUI	20-install-openwebui.sh
-feature/openwebui-config	OpenWebUI config	30-config-openwebui.sh
-feature/post-setup	Finalization, validation, cleanup	40-post-setup.sh
-main	Stable release	All scripts merged after validation
-🚀 Running the Provisioner (Windows PowerShell)
+- Linux host bootstrap for Arch-family and Debian-family systems
+- LXD projects for infrastructure and development isolation
+- Declarative platform definitions for inference and UI services
+- Inventory-driven provisioning with deterministic, auditable state
+- Offline-first operation, with explicit handling for mirrored artifacts and model storage
 
-WSL cannot be provisioned using restricted PowerShell execution policies.
-To safely run the WSL provisioning script without permanently lowering security, use:
+## Repository Layout
 
-powershell -ExecutionPolicy Bypass -File "C:\Users\price\iac-laptoplab-wsl\wsl-provision.ps1"
+```text
+iac-laptoplab/
+├── bootstrap/
+├── docs/
+│   └── architecture.md
+├── inventory/
+├── platforms/
+├── profiles/
+├── apply.bash
+└── README.md
+```
 
+## Starting Point
 
-This does not change your system’s global policy—only for this single run.
-This is required because Windows defaults to not allowing unsigned scripts, and that is the correct security posture.
+The architectural baseline lives in `docs/architecture.md`.
 
-🐧 Running the Linux Bootstrap (Inside WSL Ubuntu)
+Seed files included now:
 
-After the Windows-side provisioning, WSL will launch Ubuntu.
-Then run:
+- `bootstrap/arch-cachyos.bash`
+- `inventory/alienware-m17r2.yaml`
+- `platforms/llama.yaml`
+- `platforms/openwebui.yaml`
+- `profiles/gpu-nvidia.yaml`
+- `apply.bash`
 
-chmod +x bootstrap.sh
-./bootstrap.sh
+`apply.bash` is currently a deterministic scaffold and validation entrypoint, not a full provisioner yet.
 
+## Archived Legacy State
 
-The bootstrap script will automatically:
+The previous repo state was preserved locally as:
 
-Detect GPU and check for CUDA
+- branch: `archive/windows-wsl-legacy`
+- tag: `archive-windows-wsl-2026-04-22`
 
-Install Ollama (Nvidia-enabled)
+## Next Build Targets
 
-Install llama.cpp
-
-Install OpenWebUI
-
-Configure OpenWebUI
-
-Run post-setup validation
-
-Each step pauses so you can confirm progress and check logs.
-
-🧩 Script Execution Order
-
-Bootstrap runs everything in this order:
-
-scripts/00-detect-gpu.sh
-scripts/10-install-ollama.sh
-scripts/11-install-llama-cpp.sh
-scripts/20-install-openwebui.sh
-scripts/30-config-openwebui.sh
-scripts/40-post-setup.sh
-
-
-Each script is independently testable and lives in a Git feature branch.
-
-🪵 Logs
-
-All logs are written under:
-
-/var/log/laptoplab/
-
-
-Each script writes its own log for easy debugging.
-
-🔧 Requirements
-
-Windows 10/11 with WSL2 enabled
-
-Nvidia GPU + drivers (optional but recommended)
-
-Ubuntu WSL instance
-
-At least 16 GB RAM recommended for LLMs
-
-📌 Notes
-
-All installers are from official sources (Ollama, llama.cpp, OpenWebUI)
-
-No dependencies are downloaded from HuggingFace unless explicitly configured
-
-Branch-based workflow keeps each feature tested and isolated
+1. Expand `apply.bash` with replacement rollout and LXD snapshot orchestration.
+2. Add AMD and Intel GPU profiles.
+3. Add production and dev service hardening.
+4. Add monitoring and promotion workflows.

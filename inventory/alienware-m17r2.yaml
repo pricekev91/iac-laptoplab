@@ -1,0 +1,19 @@
+host:
+  id: alienware-m17r2
+  os: arch
+  gpu: nvidia
+  cpu: intel
+  ram_gb: 32
+  storage_root: /srv
+  model_dir: /srv/models
+
+projects:
+  - ai-infra
+  - ai-dev
+
+platforms:
+  - llama
+  - openwebui
+
+network:
+  expose_ui: false

@@ -1,0 +1,29 @@
+name: llama
+project: ai-infra
+variant:
+  default: cpu
+  supported:
+    - cpu
+    - nvidia
+    - amd
+  select_from: host.gpu
+
+container:
+  name: llama
+  image: images:ubuntu/24.04
+  profiles:
+    - default
+    - gpu
+  mounts:
+    - host: "{{ host.model_dir }}"
+      container: /models
+      readonly: true
+  env:
+    LLAMA_MODEL: /models/default.gguf
+  command: >
+    /usr/local/bin/llama-server --model $LLAMA_MODEL --host 0.0.0.0 --port 8080
+
+ports:
+  - host: 8080
+    container: 8080
+    bind_local_only: true

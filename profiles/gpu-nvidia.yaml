@@ -1,0 +1,6 @@
+config: {}
+description: NVIDIA GPU passthrough profile for inference containers
+devices:
+  gpu:
+    type: gpu
+name: gpu-nvidia
