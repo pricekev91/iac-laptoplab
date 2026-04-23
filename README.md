@@ -14,6 +14,12 @@ Build toward an LXD-based deployment model where the AI stack is split into sepa
 
 The intended direction is to keep these services loosely coupled, inventory-driven, and replaceable independently during rollout.
 
+Operationally, the end-state should feel like one command from a fresh host, while still being implemented as modular scripts underneath:
+
+- `bootstrap/<os>.bash` prepares a clean host, installs and initializes LXD, and establishes the host prerequisites
+- `apply.bash` validates the host state, invokes the OS bootstrap path when first-run LXD prerequisites are missing, and then reconciles the LXD projects, profiles, containers, mounts, and service wiring
+- the top-level workflow should be safe to rerun, with bootstrap handling first-time host preparation and apply handling ongoing reconciliation
+
 ## Current Scope
 
 - Linux host bootstrap for Arch-family and Debian-family systems
@@ -51,7 +57,7 @@ Seed files included now:
 - `profiles/gpu-intel.yaml`
 - `apply.bash`
 
-`apply.bash` is currently a deterministic scaffold and validation entrypoint, not a full provisioner yet.
+`apply.bash` is the main operator entrypoint. In apply mode it can bootstrap an Arch/CachyOS host into a usable LXD baseline before reconciling the declared container state.
 
 ## Archived Legacy State
 
@@ -63,7 +69,8 @@ The previous repo state was preserved locally as:
 ## Next Build Targets
 
 1. Expand `apply.bash` with replacement rollout and LXD snapshot orchestration.
-2. Break the stack into distinct LXD service containers for LLM engine, web inference, and agent workloads.
-3. Add production and dev service hardening.
-4. Add monitoring and promotion workflows.
-5. Refine Intel GPU profile once Intel hardware is available.
+2. Make first-run host bootstrap and LXD initialization part of the end-to-end workflow from a clean machine.
+3. Break the stack into distinct LXD service containers for LLM engine, web inference, and agent workloads.
+4. Add production and dev service hardening.
+5. Add monitoring and promotion workflows.
+6. Refine Intel GPU profile once Intel hardware is available.

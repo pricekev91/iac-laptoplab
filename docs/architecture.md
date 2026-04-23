@@ -96,6 +96,7 @@ Each host runs:
 - Bash scripts
 - YAML inventory and platform definitions
 - Deterministic apply runner
+- Modular bootstrap scripts behind a single top-level operator workflow
 
 ### 3.6 Networking
 
@@ -239,6 +240,18 @@ Contract:
 ### 4.5 Apply Runner Contract
 
 `apply.bash` performs deterministic, idempotent provisioning.
+
+End-state workflow:
+
+1. A fresh compatible host runs the OS-specific bootstrap path to install and initialize LXD.
+2. `apply.bash` validates that host prerequisites are present and may dispatch the OS-specific bootstrap path when they are absent or unready.
+3. `apply.bash` reconciles LXD projects, profiles, containers, storage mounts, environment, and service exposure.
+
+Operator experience target:
+
+- One command from the operator point of view
+- Multiple focused scripts under the hood for bootstrap, validation, and reconciliation
+- Safe reruns after the first successful bootstrap
 
 Execution flow:
 

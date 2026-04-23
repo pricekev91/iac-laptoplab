@@ -5,6 +5,10 @@ set -euo pipefail
 SCRIPT_VERSION="0.1.0"
 MODEL_ROOT="/srv/models"
 LXD_STORAGE_DIR="/var/lib/lxd"
+LXD_STORAGE_POOL="ai-default"
+LXD_STORAGE_POOL_DIR="${LXD_STORAGE_DIR}/storage-pools/${LXD_STORAGE_POOL}"
+LXD_NETWORK="ai-lxdbr0"
+LXD_NETWORK_IPV4="10.126.64.1/24"
 
 log() {
     echo "[bootstrap] $*"
@@ -59,6 +63,7 @@ install_packages() {
         lxd
         lxcfs
         dnsmasq
+        iptables-nft
         squashfs-tools
         qemu-base
         git
@@ -74,6 +79,19 @@ enable_services() {
     log "Enabling LXD and support services"
     systemctl enable --now lxd.service
     systemctl enable --now lxcfs.service
+}
+
+wait_for_lxd() {
+    local attempt
+
+    for attempt in $(seq 1 20); do
+        if lxc info >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    fail "LXD daemon did not become ready in time"
 }
 
 ensure_lxd_group_access() {
@@ -104,13 +122,92 @@ ensure_shared_layout() {
 ensure_lxd_initialized() {
     log "Checking LXD initialization state"
 
-    if lxc storage list >/dev/null 2>&1; then
+    if lxc profile show default >/dev/null 2>&1; then
         log "LXD already initialized"
         return 0
     fi
 
     log "Running non-interactive lxd init"
     lxd init --auto
+    wait_for_lxd
+}
+
+storage_pool_exists() {
+    local pool="$1"
+
+    lxc storage show "$pool" >/dev/null 2>&1
+}
+
+storage_pool_status() {
+    local pool="$1"
+
+    lxc storage show "$pool" | awk '
+        /^status:/ { print $2; found=1; exit }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+network_exists() {
+    local network="$1"
+
+    lxc network show "$network" >/dev/null 2>&1
+}
+
+network_ready() {
+    local network="$1"
+
+    lxc network info "$network" >/dev/null 2>&1
+}
+
+ensure_lxd_storage_pool() {
+    if storage_pool_exists "$LXD_STORAGE_POOL"; then
+        log "LXD storage pool already present: $LXD_STORAGE_POOL"
+    else
+        log "Creating LXD storage pool: $LXD_STORAGE_POOL"
+        install -d -m 0711 "$LXD_STORAGE_DIR/storage-pools"
+        install -d -m 0711 "$LXD_STORAGE_POOL_DIR"
+        lxc storage create "$LXD_STORAGE_POOL" dir source="$LXD_STORAGE_POOL_DIR"
+    fi
+}
+
+ensure_lxd_network() {
+    if network_exists "$LXD_NETWORK"; then
+        log "LXD network already present: $LXD_NETWORK"
+    else
+        log "Creating LXD bridge network: $LXD_NETWORK"
+        lxc network create "$LXD_NETWORK" ipv4.address="$LXD_NETWORK_IPV4" ipv4.nat=true ipv6.address=none
+    fi
+}
+
+ensure_default_profile() {
+    log "Configuring global default LXD profile"
+    if ! lxc profile show default >/dev/null 2>&1; then
+        lxc profile create default
+    fi
+    lxc profile device remove default root >/dev/null 2>&1 || true
+    lxc profile device remove default eth0 >/dev/null 2>&1 || true
+    lxc profile device add default root disk path=/ pool="$LXD_STORAGE_POOL"
+    lxc profile device add default eth0 nic name=eth0 network="$LXD_NETWORK"
+}
+
+validate_lxd_prerequisites() {
+    local storage_status
+
+    storage_status="$(storage_pool_status "$LXD_STORAGE_POOL")" || fail "Unable to determine status for LXD storage pool: $LXD_STORAGE_POOL"
+    case "${storage_status,,}" in
+        available|created)
+            log "LXD storage pool ready: $LXD_STORAGE_POOL ($storage_status)"
+            ;;
+        *)
+            fail "LXD storage pool '$LXD_STORAGE_POOL' is not ready (status: $storage_status)"
+            ;;
+    esac
+
+    if network_ready "$LXD_NETWORK"; then
+        log "LXD network ready: $LXD_NETWORK"
+    else
+        fail "LXD network '$LXD_NETWORK' is not ready"
+    fi
 }
 
 print_next_steps() {
@@ -138,9 +235,14 @@ main() {
     log "Arch/CachyOS bootstrap v${SCRIPT_VERSION}"
     install_packages
     enable_services
+    wait_for_lxd
     ensure_lxd_group_access "$target_user"
     ensure_shared_layout
     ensure_lxd_initialized
+    ensure_lxd_storage_pool
+    ensure_lxd_network
+    ensure_default_profile
+    validate_lxd_prerequisites
     print_next_steps "$target_user"
 }
 

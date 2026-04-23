@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="apply"
 SNAPSHOT_PREFIX="preapply"
+ORIGINAL_ARGS=("$@")
 
 usage() {
     cat <<'EOF'
@@ -30,6 +31,119 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+default_root_pool() {
+    lxc profile show default | awk '
+        /^devices:/ { in_devices=1; next }
+        in_devices && /^  root:$/ { in_root=1; next }
+        in_root && /^    pool:/ { print $2; exit }
+        in_root && /^  [^ ]/ { in_root=0 }
+    '
+}
+
+default_profile_network() {
+    lxc profile show default | awk '
+        /^devices:/ { in_devices=1; next }
+        in_devices && /^  eth0:$/ { in_eth0=1; next }
+        in_eth0 && /^    network:/ { print $2; exit }
+        in_eth0 && /^  [^ ]/ { in_eth0=0 }
+    '
+}
+
+storage_pool_status() {
+    local pool="$1"
+
+    lxc storage show "$pool" | awk '
+        /^status:/ { print $2; found=1; exit }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+require_lxd_storage_ready() {
+    local pool
+    local status
+
+    pool="$(default_root_pool)"
+    [[ -n "$pool" ]] || fail "Unable to determine the root storage pool from the global default LXD profile"
+
+    status="$(storage_pool_status "$pool")" || fail "Unable to determine status for LXD storage pool: $pool"
+    case "${status,,}" in
+        available|created)
+            log "LXD storage pool ready: $pool ($status)"
+            ;;
+        *)
+            fail "LXD storage pool '$pool' is not ready (status: $status). Run the host bootstrap/LXD initialization first, then rerun apply."
+            ;;
+    esac
+}
+
+require_lxd_network_ready() {
+    local network
+
+    network="$(default_profile_network)"
+    [[ -n "$network" ]] || fail "Unable to determine the default LXD bridge from the global default LXD profile"
+
+    lxc network info "$network" >/dev/null 2>&1 || fail "LXD network '$network' is not ready. Run the host bootstrap/LXD initialization first, then rerun apply."
+    log "LXD network ready: $network"
+}
+
+bootstrap_script_for_os() {
+    local host_os="$1"
+
+    case "${host_os,,}" in
+        arch|cachyos)
+            printf '%s/bootstrap/arch-cachyos.bash\n' "$SCRIPT_DIR"
+            ;;
+        *)
+            fail "No bootstrap script defined for inventory host.os=$host_os"
+            ;;
+    esac
+}
+
+lxd_environment_ready() {
+    local pool
+    local status
+    local network
+
+    command -v lxc >/dev/null 2>&1 || return 1
+    lxc info >/dev/null 2>&1 || return 1
+
+    pool="$(default_root_pool 2>/dev/null || true)"
+    [[ -n "$pool" ]] || return 1
+    status="$(storage_pool_status "$pool" 2>/dev/null || true)"
+    case "${status,,}" in
+        available|created)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    network="$(default_profile_network 2>/dev/null || true)"
+    [[ -n "$network" ]] || return 1
+    lxc network info "$network" >/dev/null 2>&1 || return 1
+}
+
+ensure_host_bootstrapped() {
+    local host_os="$1"
+    local bootstrap_script
+
+    if lxd_environment_ready; then
+        return 0
+    fi
+
+    bootstrap_script="$(bootstrap_script_for_os "$host_os")"
+    [[ -x "$bootstrap_script" ]] || fail "Bootstrap script is not executable: $bootstrap_script"
+
+    if [[ ${EUID} -ne 0 ]]; then
+        require_command sudo
+        log "LXD host prerequisites are missing or unready; re-running apply with sudo to bootstrap the host"
+        exec sudo bash "$0" "${ORIGINAL_ARGS[@]}"
+    fi
+
+    log "LXD host prerequisites are missing or unready; running bootstrap: $bootstrap_script"
+    bash "$bootstrap_script"
+}
+
 run_cmd() {
     if [[ "$MODE" == "plan" ]]; then
         printf '[plan]'
@@ -45,40 +159,26 @@ container_exists() {
     local project="$1"
     local name="$2"
 
-    lxc list --project "$project" --format json | python3 - "$name" <<'PY'
-import json
-import sys
-
-target = sys.argv[1]
-instances = json.load(sys.stdin)
-raise SystemExit(0 if any(item.get("name") == target for item in instances) else 1)
-PY
+    lxc info "$name" --project "$project" >/dev/null 2>&1
 }
 
 project_exists() {
     local project="$1"
 
-    lxc project list --format json | python3 - "$project" <<'PY'
-import json
-import sys
-
-target = sys.argv[1]
-projects = json.load(sys.stdin)
-raise SystemExit(0 if any(item.get("name") == target for item in projects) else 1)
-PY
+    lxc project show "$project" >/dev/null 2>&1
 }
 
 profile_exists() {
     local profile="$1"
 
-    lxc profile list --format json | python3 - "$profile" <<'PY'
-import json
-import sys
+    lxc profile show "$profile" >/dev/null 2>&1
+}
 
-target = sys.argv[1]
-profiles = json.load(sys.stdin)
-raise SystemExit(0 if any(item.get("name") == target for item in profiles) else 1)
-PY
+project_profile_exists() {
+    local project="$1"
+    local profile="$2"
+
+    lxc profile show "$profile" --project "$project" >/dev/null 2>&1
 }
 
 container_running() {
@@ -134,6 +234,42 @@ replace_container() {
     run_cmd lxc stop "$name" --project "$project" --force || true
     run_cmd lxc delete "$name" --project "$project"
     run_cmd lxc init "$image" "$name" --project "$project"
+}
+
+sync_project_default_profile() {
+    local project="$1"
+
+    if [[ "$MODE" == "plan" ]]; then
+        printf '[plan] sync project default profile from global default for %q\n' "$project"
+        return 0
+    fi
+
+    if ! project_profile_exists "$project" default; then
+        run_cmd lxc profile create default --project "$project"
+    fi
+
+    log "Sync project default profile from global default: $project/default"
+    lxc profile show default | lxc profile edit default --project "$project"
+}
+
+ensure_project_gpu_profile() {
+    local project="$1"
+    local profile="$2"
+    local profile_file="$3"
+
+    log "Ensure project profile from $profile_file in $project"
+    if [[ "$MODE" == "apply" ]]; then
+        if ! project_profile_exists "$project" "$profile"; then
+            run_cmd lxc profile create "$profile" --project "$project"
+        else
+            log "Project profile already present: $project/$profile"
+        fi
+
+        render_profile_yaml "$profile_file" | lxc profile edit "$profile" --project "$project"
+    else
+        run_cmd lxc profile create "$profile" --project "$project"
+        printf '[plan] lxc profile edit %q --project %q < %q\n' "$profile" "$project" "$profile_file"
+    fi
 }
 
 render_profile_yaml() {
@@ -445,6 +581,7 @@ def emit(name, value):
     print(f'{name}={shlex.quote(str(value))}')
 
 emit('HOST_ID', state['host']['id'])
+emit('HOST_OS', state['host']['os'])
 emit('GPU_PROFILE', state['gpu_profile'])
 emit('GPU_PROFILE_FILE', state['gpu_profile_file'])
 emit('PROJECT_COUNT', len(state['projects']))
@@ -487,6 +624,13 @@ log "Host: $HOST_ID"
 log "Mode: $MODE"
 log "Resolved GPU profile: $GPU_PROFILE"
 
+if [[ "$MODE" == "apply" ]]; then
+    ensure_host_bootstrapped "$HOST_OS"
+    require_command lxc
+    require_lxd_storage_ready
+    require_lxd_network_ready
+fi
+
 for ((i = 0; i < PROJECT_COUNT; i++)); do
     project_var="PROJECT_${i}"
     project_name="${!project_var}"
@@ -502,22 +646,16 @@ for ((i = 0; i < PROJECT_COUNT; i++)); do
     else
         run_cmd lxc project create "$project_name"
     fi
+
+    if [[ "$MODE" == "apply" ]]; then
+        require_command lxc
+        sync_project_default_profile "$project_name"
+    else
+        printf '[plan] sync project default profile from global default for %q\n' "$project_name"
+    fi
 done
 
-log "Ensure GPU profile from $GPU_PROFILE_FILE"
-if [[ "$MODE" == "apply" ]]; then
-    require_command lxc
-    if profile_exists "$GPU_PROFILE"; then
-        log "Profile already present: $GPU_PROFILE"
-    else
-        run_cmd lxc profile create "$GPU_PROFILE"
-    fi
-
-    render_profile_yaml "$GPU_PROFILE_FILE" | lxc profile edit "$GPU_PROFILE"
-else
-    run_cmd lxc profile create "$GPU_PROFILE"
-    printf '[plan] lxc profile edit %q < %q\n' "$GPU_PROFILE" "$GPU_PROFILE_FILE"
-fi
+log "Use GPU profile definition from $GPU_PROFILE_FILE"
 
 for ((i = 0; i < PLATFORM_COUNT; i++)); do
     name_var="PLATFORM_${i}_NAME"
@@ -548,6 +686,12 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     for ((p = 0; p < profile_count; p++)); do
         profile_var="PLATFORM_${i}_PROFILE_${p}"
         profile_args+=("${!profile_var}")
+    done
+
+    for profile_name in "${profile_args[@]}"; do
+        if [[ "$profile_name" == "$GPU_PROFILE" ]]; then
+            ensure_project_gpu_profile "$project_name" "$GPU_PROFILE" "$GPU_PROFILE_FILE"
+        fi
     done
 
     if [[ "$MODE" == "apply" ]]; then
