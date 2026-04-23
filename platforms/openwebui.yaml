@@ -10,7 +10,7 @@ variant:
 
 container:
   name: openwebui
-  image: images:ubuntu/24.04
+  image: ubuntu:24.04
   profiles:
     - default
   mounts:

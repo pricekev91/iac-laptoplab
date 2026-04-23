@@ -310,7 +310,6 @@ Properties:
 
 - Debian/Proxmox bootstrap
 - Full apply runner with replacement rollout and snapshot orchestration
-- GPU profiles for AMD and Intel
 - Multi-host orchestration
 - Snapshot and rollback automation
 
@@ -355,7 +354,6 @@ Manual:
 
 ### 10.1 Immediate
 
-- Add AMD and Intel GPU profiles
 - Expand `apply.bash` with replacement rollout logic
 - Add LXD snapshot orchestration before destructive mutation
 - Add host-specific inventory files beyond `alienware-m17r2`

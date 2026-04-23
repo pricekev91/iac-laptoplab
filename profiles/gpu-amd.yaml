@@ -1,0 +1,6 @@
+config: {}
+description: AMD GPU passthrough profile for inference containers
+devices:
+  gpu:
+    type: gpu
+name: gpu-amd

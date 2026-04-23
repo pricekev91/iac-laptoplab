@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="apply"
+SNAPSHOT_PREFIX="preapply"
 
 usage() {
     cat <<'EOF'
@@ -44,28 +45,95 @@ container_exists() {
     local project="$1"
     local name="$2"
 
-    lxc list --project "$project" --format csv -c n | grep -Fxq "$name"
+    lxc list --project "$project" --format json | python3 - "$name" <<'PY'
+import json
+import sys
+
+target = sys.argv[1]
+instances = json.load(sys.stdin)
+raise SystemExit(0 if any(item.get("name") == target for item in instances) else 1)
+PY
 }
 
 project_exists() {
     local project="$1"
 
-    lxc project list --format csv -c n | grep -Fxq "$project"
+    lxc project list --format json | python3 - "$project" <<'PY'
+import json
+import sys
+
+target = sys.argv[1]
+projects = json.load(sys.stdin)
+raise SystemExit(0 if any(item.get("name") == target for item in projects) else 1)
+PY
 }
 
 profile_exists() {
     local profile="$1"
 
-    lxc profile list --format csv -c n | grep -Fxq "$profile"
+    lxc profile list --format json | python3 - "$profile" <<'PY'
+import json
+import sys
+
+target = sys.argv[1]
+profiles = json.load(sys.stdin)
+raise SystemExit(0 if any(item.get("name") == target for item in profiles) else 1)
+PY
 }
 
 container_running() {
     local project="$1"
     local name="$2"
 
-local result
-    result="$(lxc list --project "$project" --format csv -c ns | awk -F, -v target="$name" '$1 == target { print $2 }')"
-    [[ "$result" == "RUNNING" ]]
+    lxc list --project "$project" --format json | python3 - "$name" <<'PY'
+import json
+import sys
+
+target = sys.argv[1]
+instances = json.load(sys.stdin)
+for item in instances:
+    if item.get("name") == target:
+        raise SystemExit(0 if item.get("status") == "Running" else 1)
+raise SystemExit(1)
+PY
+}
+
+resolve_image_alias() {
+    local image="$1"
+
+    if lxc image info "$image" >/dev/null 2>&1; then
+        printf '%s\n' "$image"
+        return 0
+    fi
+
+    if [[ "$image" == "images:ubuntu/24.04" ]]; then
+        log "Image alias fallback: images:ubuntu/24.04 -> ubuntu:24.04"
+        printf '%s\n' "ubuntu:24.04"
+        return 0
+    fi
+
+    printf '%s\n' "$image"
+}
+
+snapshot_container() {
+    local project="$1"
+    local name="$2"
+    local snapshot_name="$3"
+
+    log "Create snapshot: $project/$name@$snapshot_name"
+    run_cmd lxc snapshot create "$name" "$snapshot_name" --project "$project"
+}
+
+replace_container() {
+    local project="$1"
+    local name="$2"
+    local image="$3"
+    local snapshot_name="$4"
+
+    snapshot_container "$project" "$name" "$snapshot_name"
+    run_cmd lxc stop "$name" --project "$project" --force || true
+    run_cmd lxc delete "$name" --project "$project"
+    run_cmd lxc init "$image" "$name" --project "$project"
 }
 
 render_profile_yaml() {
@@ -466,6 +534,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     project_name="${!project_var}"
     container_name="${!container_var}"
     image_name="${!image_var}"
+    resolved_image_name="$image_name"
     command_value="${!command_var}"
     profile_count="${!profile_count_var}"
     mount_count="${!mount_count_var}"
@@ -473,6 +542,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     port_count="${!port_count_var}"
 
     log "Reconciling platform: $platform_name"
+    snapshot_name="${SNAPSHOT_PREFIX}-$(date +%Y%m%d%H%M%S)-${platform_name}"
 
     profile_args=()
     for ((p = 0; p < profile_count; p++)); do
@@ -482,13 +552,19 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
 
     if [[ "$MODE" == "apply" ]]; then
         require_command lxc
+        resolved_image_name="$(resolve_image_alias "$image_name")"
         if ! container_exists "$project_name" "$container_name"; then
-            init_args=(lxc init "$image_name" "$container_name" --project "$project_name")
+            init_args=(lxc init "$resolved_image_name" "$container_name" --project "$project_name")
             run_cmd "${init_args[@]}"
         else
-            log "Container already present: $project_name/$container_name"
+            log "Container exists and will be replaced: $project_name/$container_name"
+            replace_container "$project_name" "$container_name" "$resolved_image_name" "$snapshot_name"
         fi
     else
+        log "Plan includes replacement workflow if container exists: $project_name/$container_name"
+        snapshot_container "$project_name" "$container_name" "$snapshot_name"
+        run_cmd lxc stop "$container_name" --project "$project_name" --force
+        run_cmd lxc delete "$container_name" --project "$project_name"
         init_args=(lxc init "$image_name" "$container_name" --project "$project_name")
         run_cmd "${init_args[@]}"
     fi

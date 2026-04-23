@@ -1,0 +1,4 @@
+config: {}
+description: Intel GPU profile placeholder; refine when Intel hardware is available
+devices: {}
+name: gpu-intel

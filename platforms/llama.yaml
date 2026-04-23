@@ -10,7 +10,7 @@ variant:
 
 container:
   name: llama
-  image: images:ubuntu/24.04
+  image: ubuntu:24.04
   profiles:
     - default
     - gpu
