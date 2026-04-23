@@ -14,6 +14,11 @@ Build toward an LXD-based deployment model where the AI stack is split into sepa
 
 The intended direction is to keep these services loosely coupled, inventory-driven, and replaceable independently during rollout.
 
+Current naming contract:
+
+- projects represent environments: `prod`, `dev`
+- platform and container names represent service roles: `ai-engine`, `ai-presentation`, future `ai-logistics`
+
 Operationally, the end-state should feel like one command from a fresh host, while still being implemented as modular scripts underneath:
 
 - `bootstrap/<os>.bash` prepares a clean host, installs and initializes LXD, and establishes the host prerequisites
@@ -74,8 +79,8 @@ Seed files included now:
 
 - `bootstrap/arch-cachyos.bash`
 - `inventory/alienware-m17r2.yaml`
-- `platforms/llama.yaml`
-- `platforms/openwebui.yaml`
+- `platforms/ai-engine.yaml`
+- `platforms/ai-presentation.yaml`
 - `scripts/provision-ai-engine.bash`
 - `scripts/provision-openwebui.bash`
 - `profiles/gpu-nvidia.yaml`

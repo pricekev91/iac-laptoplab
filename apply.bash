@@ -225,9 +225,38 @@ project_profile_exists() {
     lxc profile show "$profile" --project "$project" >/dev/null 2>&1
 }
 
+project_rename_if_needed() {
+    local from_project="$1"
+    local to_project="$2"
+
+    [[ -n "$from_project" && -n "$to_project" ]] || return 0
+    [[ "$from_project" != "$to_project" ]] || return 0
+
+    if [[ "$MODE" == "plan" ]]; then
+        printf '[plan] rename project %q -> %q when legacy project exists and target is absent\n' "$from_project" "$to_project"
+        return 0
+    fi
+
+    if ! project_exists "$from_project"; then
+        return 0
+    fi
+
+    if project_exists "$to_project"; then
+        log "Target project already present; leaving legacy project in place: $from_project"
+        return 0
+    fi
+
+    log "Rename project: $from_project -> $to_project"
+    run_cmd lxc project rename "$from_project" "$to_project"
+}
+
 container_config_keys() {
     local project="$1"
     local name="$2"
+
+    if [[ "$MODE" == "plan" ]]; then
+        return 0
+    fi
 
     lxc config show "$name" --project "$project" | awk '
         /^config:$/ { in_config=1; next }
@@ -244,6 +273,10 @@ container_device_names() {
     local project="$1"
     local name="$2"
 
+    if [[ "$MODE" == "plan" ]]; then
+        return 0
+    fi
+
     lxc config device list "$name" --project "$project"
 }
 
@@ -251,6 +284,10 @@ container_has_device() {
     local project="$1"
     local name="$2"
     local device_name="$3"
+
+    if [[ "$MODE" == "plan" ]]; then
+        return 1
+    fi
 
     container_device_names "$project" "$name" | grep -Fxq "$device_name"
 }
@@ -260,6 +297,10 @@ container_device_get() {
     local name="$2"
     local device_name="$3"
     local key="$4"
+
+    if [[ "$MODE" == "plan" ]]; then
+        return 0
+    fi
 
     lxc config device get "$name" "$device_name" "$key" --project "$project" 2>/dev/null || true
 }
@@ -320,6 +361,10 @@ remove_stale_managed_devices() {
 container_running() {
     local project="$1"
     local name="$2"
+
+    if [[ "$MODE" == "plan" ]]; then
+        return 1
+    fi
 
     [[ "$(lxc info "$name" --project "$project" 2>/dev/null | awk '/^Status:/ { print $2; exit }')" == "RUNNING" ]]
 }
@@ -539,6 +584,32 @@ ensure_runtime_managed() {
     elif [[ "$service_active_state" != "active" ]]; then
         run_cmd lxc exec "$name" --project "$project" -- systemctl start "$service_name"
     fi
+}
+
+migrate_container_name_if_needed() {
+    local legacy_project="$1"
+    local legacy_container_name="$2"
+    local target_project="$3"
+    local target_container_name="$4"
+
+    [[ -n "$legacy_container_name" ]] || return 0
+    [[ "$legacy_project/$legacy_container_name" != "$target_project/$target_container_name" ]] || return 0
+
+    if [[ "$MODE" == "plan" ]]; then
+        printf '[plan] move legacy container %q/%q to %q/%q when target is absent\n' "$legacy_project" "$legacy_container_name" "$target_project" "$target_container_name"
+        return 0
+    fi
+
+    if container_exists "$target_project" "$target_container_name"; then
+        return 0
+    fi
+
+    if ! container_exists "$legacy_project" "$legacy_container_name"; then
+        return 0
+    fi
+
+    log "Rename container: $legacy_project/$legacy_container_name -> $target_project/$target_container_name"
+    run_cmd lxc move "$legacy_container_name" "$target_container_name" --project "$legacy_project" --target-project "$target_project"
 }
 
 resolve_image_alias() {
@@ -812,6 +883,7 @@ inventory = parse_yaml_file(inventory_path)
 
 host = inventory.get('host', {})
 projects = inventory.get('projects', [])
+project_migrations = inventory.get('project_migrations', [])
 platform_names = inventory.get('platforms', [])
 network = inventory.get('network', {})
 
@@ -854,6 +926,7 @@ for platform_name in platform_names:
     profiles = container.get('profiles', [])
     ports = platform.get('ports', [])
     runtime = platform.get('runtime', {})
+    migration = platform.get('migration', {})
 
     host_model_dir = str(host['model_dir'])
     resolved_mounts = []
@@ -899,6 +972,8 @@ for platform_name in platform_names:
         'name': platform['name'],
         'project': platform['project'],
         'container_name': container['name'],
+        'legacy_project': migration.get('legacy_project', platform['project']),
+        'legacy_container_name': migration.get('legacy_container_name', ''),
         'image': container['image'],
         'profiles': resolved_profiles,
         'mounts': resolved_mounts,
@@ -913,6 +988,7 @@ state = {
     'inventory': str(inventory_path),
     'host': host,
     'projects': projects,
+    'project_migrations': project_migrations,
     'gpu_profile': gpu_profile,
     'gpu_profile_file': str(profile_file),
     'platforms': platforms,
@@ -956,15 +1032,22 @@ emit('HOST_OS', state['host']['os'])
 emit('GPU_PROFILE', state['gpu_profile'])
 emit('GPU_PROFILE_FILE', state['gpu_profile_file'])
 emit('PROJECT_COUNT', len(state['projects']))
+emit('PROJECT_MIGRATION_COUNT', len(state['project_migrations']))
 emit('PLATFORM_COUNT', len(state['platforms']))
 
 for index, project in enumerate(state['projects']):
     emit(f'PROJECT_{index}', project)
 
+for index, migration in enumerate(state['project_migrations']):
+    emit(f'PROJECT_MIGRATION_{index}_FROM', migration['from'])
+    emit(f'PROJECT_MIGRATION_{index}_TO', migration['to'])
+
 for index, platform in enumerate(state['platforms']):
     emit(f'PLATFORM_{index}_NAME', platform['name'])
     emit(f'PLATFORM_{index}_PROJECT', platform['project'])
     emit(f'PLATFORM_{index}_CONTAINER_NAME', platform['container_name'])
+    emit(f'PLATFORM_{index}_LEGACY_PROJECT', platform['legacy_project'])
+    emit(f'PLATFORM_{index}_LEGACY_CONTAINER_NAME', platform['legacy_container_name'])
     emit(f'PLATFORM_{index}_IMAGE', platform['image'])
     emit(f'PLATFORM_{index}_COMMAND', platform['command'])
     emit(f'PLATFORM_{index}_RUNTIME_INSTALL_SCRIPT', platform['runtime_install_script'])
@@ -1005,6 +1088,12 @@ if [[ "$MODE" == "apply" ]]; then
     require_lxd_subid_ready
 fi
 
+for ((i = 0; i < PROJECT_MIGRATION_COUNT; i++)); do
+    project_migration_from_var="PROJECT_MIGRATION_${i}_FROM"
+    project_migration_to_var="PROJECT_MIGRATION_${i}_TO"
+    project_rename_if_needed "${!project_migration_from_var}" "${!project_migration_to_var}"
+done
+
 for ((i = 0; i < PROJECT_COUNT; i++)); do
     project_var="PROJECT_${i}"
     project_name="${!project_var}"
@@ -1017,14 +1106,10 @@ for ((i = 0; i < PROJECT_COUNT; i++)); do
         else
             log "Project already present: $project_name"
         fi
-    else
-        run_cmd lxc project create "$project_name"
-    fi
 
-    if [[ "$MODE" == "apply" ]]; then
-        require_command lxc
         sync_project_default_profile "$project_name"
     else
+        run_cmd lxc project create "$project_name"
         printf '[plan] sync project default profile from global default for %q\n' "$project_name"
     fi
 done
@@ -1035,6 +1120,8 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     name_var="PLATFORM_${i}_NAME"
     project_var="PLATFORM_${i}_PROJECT"
     container_var="PLATFORM_${i}_CONTAINER_NAME"
+    legacy_project_var="PLATFORM_${i}_LEGACY_PROJECT"
+    legacy_container_var="PLATFORM_${i}_LEGACY_CONTAINER_NAME"
     image_var="PLATFORM_${i}_IMAGE"
     command_var="PLATFORM_${i}_COMMAND"
     runtime_install_script_var="PLATFORM_${i}_RUNTIME_INSTALL_SCRIPT"
@@ -1047,6 +1134,8 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     platform_name="${!name_var}"
     project_name="${!project_var}"
     container_name="${!container_var}"
+    legacy_project_name="${!legacy_project_var}"
+    legacy_container_name="${!legacy_container_var}"
     image_name="${!image_var}"
     resolved_image_name="$image_name"
     command_value="${!command_var}"
@@ -1059,6 +1148,11 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
 
     log "Reconciling platform: $platform_name"
     snapshot_name="${SNAPSHOT_PREFIX}-$(date +%Y%m%d%H%M%S)-${platform_name}"
+
+    migrate_container_name_if_needed "$project_name" "$legacy_container_name" "$project_name" "$container_name"
+    if [[ "$legacy_project_name" != "$project_name" ]]; then
+        migrate_container_name_if_needed "$legacy_project_name" "$legacy_container_name" "$project_name" "$container_name"
+    fi
 
     profile_args=()
     for ((p = 0; p < profile_count; p++)); do

@@ -31,7 +31,7 @@ A portable, deterministic AI platform that can:
 ### 2.1 Logical Layers
 
 - Host Layer: Minimal OS plus LXD substrate
-- Platform Layer: LXD projects `ai-infra` and `ai-dev`
+- Platform Layer: LXD projects `prod` and `dev`
 - Service Layer: Containers providing inference, UI, agentic services, and future orchestration
 - Client Layer: Editors, browsers, and CLI tools consuming API and UI endpoints
 
@@ -138,12 +138,18 @@ host:
   ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
 
 projects:
-  - ai-infra
-  - ai-dev
+  - prod
+  - dev
+
+project_migrations:
+  - from: ai-infra
+    to: prod
+  - from: ai-dev
+    to: dev
 
 platforms:
-  - llama
-  - openwebui
+  - ai-engine
+  - ai-presentation
 
 network:
   expose_ui: false
@@ -152,7 +158,7 @@ network:
 Contract:
 
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
-- `host.model_dir` is the canonical shared GGUF storage root for both `ai-infra` and `ai-dev`
+- `host.model_dir` is the canonical shared GGUF storage root for both `prod` and `dev`
 - `host.ai_engine_model` selects the model filename mounted into the engine runtime
 - `projects` defines required LXD projects
 - `platforms` defines which platform YAMLs to apply
@@ -160,11 +166,11 @@ Contract:
 
 ### 4.3 Platform Definition Schema
 
-Example: `platforms/llama.yaml`
+Example: `platforms/ai-engine.yaml`
 
 ```yaml
-name: llama
-project: ai-infra
+name: ai-engine
+project: prod
 variant:
   default: cpu
   supported:
@@ -174,7 +180,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: llama
+  name: ai-engine
   image: images:ubuntu/24.04
   profiles:
     - default
@@ -192,17 +198,20 @@ runtime:
   service_name: ai-engine
   install_script: scripts/provision-ai-engine.bash
 
+migration:
+  legacy_container_name: llama
+
 ports:
   - host: 8080
     container: 8080
     bind_local_only: true
 ```
 
-Example: `platforms/openwebui.yaml`
+Example: `platforms/ai-presentation.yaml`
 
 ```yaml
-name: openwebui
-project: ai-dev
+name: ai-presentation
+project: dev
 variant:
   default: cpu
   supported:
@@ -212,7 +221,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: openwebui
+  name: ai-presentation
   image: images:ubuntu/24.04
   profiles:
     - default
@@ -221,13 +230,16 @@ container:
       container: /models
       readonly: true
   env:
-    BACKEND_URL: http://llama.ai-infra:8080
+    BACKEND_URL: http://ai-engine.prod:8080
   command: >
     /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
 
 runtime:
   service_name: ai-presentation
   install_script: scripts/provision-openwebui.bash
+
+migration:
+  legacy_container_name: openwebui
 
 ports:
   - host: 3000
@@ -365,11 +377,11 @@ This means runtime provisioning inside containers must behave like a convergent 
 ## 8. Security Model
 
 - LXD container isolation
-- Project-level separation between `ai-infra` and `ai-dev`
+- Project-level separation between `prod` and `dev`
 - Minimal host privileges
 - GPU access only where required
 - Local-only network exposure by default
-- `ai-dev` must not communicate directly with `ai-infra`
+- `dev` must not communicate directly with `prod`
 - LAN exposure for production services is allowed when explicitly enabled and managed on the host
 
 ## 9. Automation Goals

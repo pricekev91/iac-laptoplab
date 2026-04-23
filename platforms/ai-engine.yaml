@@ -1,5 +1,5 @@
-name: llama
-project: ai-infra
+name: ai-engine
+project: prod
 variant:
   default: cpu
   supported:
@@ -9,7 +9,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: llama
+  name: ai-engine
   image: ubuntu:24.04
   profiles:
     - default
@@ -26,6 +26,9 @@ container:
 runtime:
   service_name: ai-engine
   install_script: scripts/provision-ai-engine.bash
+
+migration:
+  legacy_container_name: llama
 
 ports:
   - host: 8080
