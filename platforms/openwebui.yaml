@@ -20,7 +20,11 @@ container:
   env:
     BACKEND_URL: http://llama.ai-infra:8080
   command: >
-    /usr/local/bin/openwebui --host 0.0.0.0 --port 3000
+    /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
+
+runtime:
+  service_name: ai-presentation
+  install_script: scripts/provision-openwebui.bash
 
 ports:
   - host: 3000

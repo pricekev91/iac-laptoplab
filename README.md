@@ -24,6 +24,7 @@ Idempotency is a design requirement for both layers:
 
 - bootstrap must be safe to rerun on a partially prepared host and either converge cleanly or fail with an explicit prerequisite error
 - apply must be safe to rerun against an already bootstrapped host and converge the declared LXD state without hidden one-time assumptions
+- runtime provisioning inside containers must reuse installed packages, source trees, and built artifacts whenever the declared inputs have not changed
 
 ## Current Scope
 
@@ -33,6 +34,22 @@ Idempotency is a design requirement for both layers:
 - Inventory-driven provisioning with deterministic, auditable state
 - Idempotent bootstrap and apply behavior as a first-class requirement
 - Offline-first operation, with explicit handling for mirrored artifacts and model storage
+
+## Rerun Contract
+
+Normal reruns should be fast and boring:
+
+- unchanged projects, profiles, devices, environment, and proxy bindings are left in place
+- unchanged containers are not replaced
+- unchanged runtime installers are not supposed to redownload packages or source archives
+- unchanged services are not supposed to be rebuilt or restarted just because `apply.bash` ran again
+
+Network-heavy work is expected only when one of these inputs changes:
+
+- the platform definition changes in a way that alters desired container state
+- the runtime install script changes
+- the runtime service is missing, failed, or otherwise unhealthy and must be repaired
+- the target container has never completed its first successful provisioning run
 
 ## Repository Layout
 
@@ -44,6 +61,7 @@ iac-laptoplab/
 ├── inventory/
 ├── platforms/
 ├── profiles/
+├── scripts/
 ├── apply.bash
 └── README.md
 ```
@@ -58,6 +76,8 @@ Seed files included now:
 - `inventory/alienware-m17r2.yaml`
 - `platforms/llama.yaml`
 - `platforms/openwebui.yaml`
+- `scripts/provision-ai-engine.bash`
+- `scripts/provision-openwebui.bash`
 - `profiles/gpu-nvidia.yaml`
 - `profiles/gpu-amd.yaml`
 - `profiles/gpu-intel.yaml`
@@ -74,9 +94,8 @@ The previous repo state was preserved locally as:
 
 ## Next Build Targets
 
-1. Expand `apply.bash` with replacement rollout and LXD snapshot orchestration.
-2. Make first-run host bootstrap and LXD initialization part of the end-to-end workflow from a clean machine.
-3. Break the stack into distinct LXD service containers for LLM engine, web inference, and agent workloads.
-4. Add production and dev service hardening.
-5. Add monitoring and promotion workflows.
-6. Refine Intel GPU profile once Intel hardware is available.
+1. Finish the naming migration from implementation-specific labels to stable service-role labels.
+2. Add production and dev service hardening.
+3. Add monitoring and promotion workflows.
+4. Add mirrored artifact and package cache support for stricter offline rebuild behavior.
+5. Refine Intel GPU profile once Intel hardware is available.

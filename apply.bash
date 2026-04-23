@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="apply"
 SNAPSHOT_PREFIX="preapply"
 ORIGINAL_ARGS=("$@")
+LXD_SUBID_HOST_START="1000000"
+LXD_SUBID_RANGE="1000000000"
 
 usage() {
     cat <<'EOF'
@@ -29,6 +31,27 @@ log() {
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+hash_text() {
+    sha256sum | awk '{ print $1 }'
+}
+
+hash_file() {
+    sha256sum "$1" | awk '{ print $1 }'
+}
+
+join_by_comma() {
+    local first=1
+
+    for value in "$@"; do
+        if (( first )); then
+            printf '%s' "$value"
+            first=0
+        else
+            printf ',%s' "$value"
+        fi
+    done
 }
 
 default_root_pool() {
@@ -56,6 +79,24 @@ storage_pool_status() {
         /^status:/ { print $2; found=1; exit }
         END { exit(found ? 0 : 1) }
     '
+}
+
+subid_mapping_ready() {
+    local mapping_file="$1"
+    local account="$2"
+
+    [[ -f "$mapping_file" ]] || return 1
+
+    awk -F: -v account="$account" -v start="$LXD_SUBID_HOST_START" -v range="$LXD_SUBID_RANGE" '
+        $1 == account && $2 == start && $3 == range { found=1 }
+        END { exit(found ? 0 : 1) }
+    ' "$mapping_file"
+}
+
+require_lxd_subid_ready() {
+    subid_mapping_ready /etc/subuid root || fail "Root subordinate UID range is not configured for LXD (${LXD_SUBID_HOST_START}:${LXD_SUBID_RANGE}). Run the host bootstrap/LXD initialization first, then rerun apply."
+    subid_mapping_ready /etc/subgid root || fail "Root subordinate GID range is not configured for LXD (${LXD_SUBID_HOST_START}:${LXD_SUBID_RANGE}). Run the host bootstrap/LXD initialization first, then rerun apply."
+    log "LXD subordinate UID/GID ranges ready"
 }
 
 require_lxd_storage_ready() {
@@ -121,6 +162,9 @@ lxd_environment_ready() {
     network="$(default_profile_network 2>/dev/null || true)"
     [[ -n "$network" ]] || return 1
     lxc network info "$network" >/dev/null 2>&1 || return 1
+
+    subid_mapping_ready /etc/subuid root || return 1
+    subid_mapping_ready /etc/subgid root || return 1
 }
 
 ensure_host_bootstrapped() {
@@ -181,21 +225,320 @@ project_profile_exists() {
     lxc profile show "$profile" --project "$project" >/dev/null 2>&1
 }
 
+container_config_keys() {
+    local project="$1"
+    local name="$2"
+
+    lxc config show "$name" --project "$project" | awk '
+        /^config:$/ { in_config=1; next }
+        in_config && /^[^ ]/ { exit }
+        in_config && /^  [^ :]+:/ {
+            key=$1
+            sub(/:$/, "", key)
+            print key
+        }
+    '
+}
+
+container_device_names() {
+    local project="$1"
+    local name="$2"
+
+    lxc config device list "$name" --project "$project"
+}
+
+container_has_device() {
+    local project="$1"
+    local name="$2"
+    local device_name="$3"
+
+    container_device_names "$project" "$name" | grep -Fxq "$device_name"
+}
+
+container_device_get() {
+    local project="$1"
+    local name="$2"
+    local device_name="$3"
+    local key="$4"
+
+    lxc config device get "$name" "$device_name" "$key" --project "$project" 2>/dev/null || true
+}
+
+remove_stale_env_keys() {
+    local project="$1"
+    local name="$2"
+    shift 2
+    local desired_keys=("$@")
+    local existing_key
+    local keep_key
+    local keep
+
+    while IFS= read -r existing_key; do
+        [[ "$existing_key" == environment.* ]] || continue
+
+        keep=0
+        for keep_key in "${desired_keys[@]}"; do
+            if [[ "$existing_key" == "environment.${keep_key}" ]]; then
+                keep=1
+                break
+            fi
+        done
+
+        if (( ! keep )); then
+            run_cmd lxc config unset "$name" "$existing_key" --project "$project"
+        fi
+    done < <(container_config_keys "$project" "$name")
+}
+
+remove_stale_managed_devices() {
+    local project="$1"
+    local name="$2"
+    local prefix="$3"
+    shift 3
+    local desired_devices=("$@")
+    local existing_device
+    local keep_device
+    local keep
+
+    while IFS= read -r existing_device; do
+        [[ "$existing_device" == ${prefix}* ]] || continue
+
+        keep=0
+        for keep_device in "${desired_devices[@]}"; do
+            if [[ "$existing_device" == "$keep_device" ]]; then
+                keep=1
+                break
+            fi
+        done
+
+        if (( ! keep )); then
+            run_cmd lxc config device remove "$name" "$existing_device" --project "$project"
+        fi
+    done < <(container_device_names "$project" "$name")
+}
+
 container_running() {
     local project="$1"
     local name="$2"
 
-    lxc list --project "$project" --format json | python3 - "$name" <<'PY'
-import json
+    [[ "$(lxc info "$name" --project "$project" 2>/dev/null | awk '/^Status:/ { print $2; exit }')" == "RUNNING" ]]
+}
+
+shell_quote() {
+    python3 - <<'PY' "$1"
+import shlex
 import sys
 
-target = sys.argv[1]
-instances = json.load(sys.stdin)
-for item in instances:
-    if item.get("name") == target:
-        raise SystemExit(0 if item.get("status") == "Running" else 1)
-raise SystemExit(1)
+print(shlex.quote(sys.argv[1]))
 PY
+}
+
+push_file_to_container() {
+    local project="$1"
+    local name="$2"
+    local source_file="$3"
+    local target_path="$4"
+    local file_mode="$5"
+
+    run_cmd lxc file push "$source_file" "${name}${target_path}" --project "$project" --create-dirs --mode="$file_mode"
+}
+
+container_file_hash() {
+    local project="$1"
+    local name="$2"
+    local target_path="$3"
+
+    lxc exec "$name" --project "$project" -- sh -lc "if [ -f $(shell_quote "$target_path") ]; then sha256sum $(shell_quote "$target_path") | awk '{ print \$1 }'; fi" 2>/dev/null || true
+}
+
+container_service_enabled_state() {
+    local project="$1"
+    local name="$2"
+    local service_name="$3"
+
+    lxc exec "$name" --project "$project" -- systemctl is-enabled "$service_name" 2>/dev/null || true
+}
+
+container_service_active_state() {
+    local project="$1"
+    local name="$2"
+    local service_name="$3"
+
+    lxc exec "$name" --project "$project" -- systemctl is-active "$service_name" 2>/dev/null || true
+}
+
+ensure_container_file_content() {
+    local project="$1"
+    local name="$2"
+    local target_path="$3"
+    local file_mode="$4"
+    local content="$5"
+    local local_hash
+    local remote_hash
+
+    local_hash="$(printf '%s' "$content" | hash_text)"
+    remote_hash="$(container_file_hash "$project" "$name" "$target_path")"
+
+    if [[ "$local_hash" == "$remote_hash" ]]; then
+        return 1
+    fi
+
+    push_rendered_file_to_container "$project" "$name" "$target_path" "$file_mode" "$content"
+    return 0
+}
+
+ensure_container_file_from_source() {
+    local project="$1"
+    local name="$2"
+    local source_file="$3"
+    local target_path="$4"
+    local file_mode="$5"
+    local local_hash
+    local remote_hash
+
+    local_hash="$(hash_file "$source_file")"
+    remote_hash="$(container_file_hash "$project" "$name" "$target_path")"
+
+    if [[ "$local_hash" == "$remote_hash" ]]; then
+        return 1
+    fi
+
+    push_file_to_container "$project" "$name" "$source_file" "$target_path" "$file_mode"
+    return 0
+}
+
+push_rendered_file_to_container() {
+    local project="$1"
+    local name="$2"
+    local target_path="$3"
+    local file_mode="$4"
+    local content="$5"
+    local temp_file
+
+    temp_file="$(mktemp)"
+    printf '%s' "$content" > "$temp_file"
+    push_file_to_container "$project" "$name" "$temp_file" "$target_path" "$file_mode"
+    rm -f "$temp_file"
+}
+
+render_runtime_environment_file() {
+    local env_count="$1"
+    local index="$2"
+    local env_lines=""
+
+    for ((e = 0; e < env_count; e++)); do
+        env_key_var="PLATFORM_${index}_ENV_${e}_KEY"
+        env_value_var="PLATFORM_${index}_ENV_${e}_VALUE"
+        env_lines+="${!env_key_var}=$(shell_quote "${!env_value_var}")"$'\n'
+    done
+
+    printf '%s' "$env_lines"
+}
+
+render_service_unit() {
+    local service_name="$1"
+    local command_value="$2"
+    local quoted_command
+
+    quoted_command="$(shell_quote "$command_value")"
+    cat <<EOF
+[Unit]
+Description=Managed runtime service for $service_name
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/$service_name
+ExecStart=/bin/bash -lc $quoted_command
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+ensure_runtime_managed() {
+    local project="$1"
+    local name="$2"
+    local platform_name="$3"
+    local service_name="$4"
+    local command_value="$5"
+    local install_script="$6"
+    local env_count="$7"
+    local index="$8"
+    local runtime_hash="$9"
+    local current_runtime_hash
+    local install_target="/root/iac/${service_name}/install.bash"
+    local env_target="/etc/default/${service_name}"
+    local unit_target="/etc/systemd/system/${service_name}.service"
+    local env_content
+    local unit_content
+    local install_script_changed=0
+    local env_changed=0
+    local unit_changed=0
+    local runtime_changed=0
+    local installer_ran=0
+    local service_enabled_state
+    local service_active_state
+
+    if [[ "$MODE" == "plan" ]]; then
+        printf '[plan] push runtime install script %q into %q/%q and execute it when runtime hash changes\n' "$install_script" "$project" "$name"
+        printf '[plan] write env file %q and systemd unit %q for %q\n' "$env_target" "$unit_target" "$service_name"
+        printf '[plan] systemctl enable --now %q inside %q/%q\n' "$service_name" "$project" "$name"
+        return 0
+    fi
+
+    current_runtime_hash="$(lxc config get "$name" user.iac.runtime_hash --project "$project" 2>/dev/null || true)"
+    env_content="$(render_runtime_environment_file "$env_count" "$index")"
+    unit_content="$(render_service_unit "$service_name" "$command_value")"
+    service_enabled_state="$(container_service_enabled_state "$project" "$name" "$service_name")"
+    service_active_state="$(container_service_active_state "$project" "$name" "$service_name")"
+
+    if ensure_container_file_from_source "$project" "$name" "$install_script" "$install_target" 0755; then
+        install_script_changed=1
+    fi
+
+    if ensure_container_file_content "$project" "$name" "$env_target" 0644 "$env_content"; then
+        env_changed=1
+    fi
+
+    if ensure_container_file_content "$project" "$name" "$unit_target" 0644 "$unit_content"; then
+        unit_changed=1
+        run_cmd lxc exec "$name" --project "$project" -- systemctl daemon-reload
+    fi
+
+    if [[ "$current_runtime_hash" != "$runtime_hash" ]]; then
+        runtime_changed=1
+    fi
+
+    if (( runtime_changed || install_script_changed )) || [[ "$service_enabled_state" == "not-found" || "$service_active_state" != "active" ]]; then
+        log "Provision runtime for $project/$name from $install_script"
+        run_cmd lxc exec "$name" --project "$project" -- bash "$install_target"
+        installer_ran=1
+    fi
+
+    if (( runtime_changed || install_script_changed || env_changed || unit_changed || installer_ran )); then
+        run_cmd lxc config set "$name" user.iac.runtime_hash "$runtime_hash" --project "$project"
+    fi
+
+    service_enabled_state="$(container_service_enabled_state "$project" "$name" "$service_name")"
+    service_active_state="$(container_service_active_state "$project" "$name" "$service_name")"
+
+    if [[ "$service_enabled_state" != "enabled" ]]; then
+        run_cmd lxc exec "$name" --project "$project" -- systemctl enable "$service_name"
+    fi
+
+    if (( runtime_changed || install_script_changed || env_changed || unit_changed || installer_ran )); then
+        if [[ "$service_active_state" == "active" ]]; then
+            run_cmd lxc exec "$name" --project "$project" -- systemctl restart "$service_name"
+        else
+            run_cmd lxc exec "$name" --project "$project" -- systemctl start "$service_name"
+        fi
+    elif [[ "$service_active_state" != "active" ]]; then
+        run_cmd lxc exec "$name" --project "$project" -- systemctl start "$service_name"
+    fi
 }
 
 resolve_image_alias() {
@@ -221,7 +564,7 @@ snapshot_container() {
     local snapshot_name="$3"
 
     log "Create snapshot: $project/$name@$snapshot_name"
-    run_cmd lxc snapshot create "$name" "$snapshot_name" --project "$project"
+    run_cmd lxc snapshot "$name" "$snapshot_name" --project "$project"
 }
 
 replace_container() {
@@ -456,6 +799,15 @@ def parse_yaml_file(path):
     lines = path.read_text().splitlines()
     return parse_yaml_lines(lines)
 
+def render_host_template(value, host):
+    def replace(match):
+        key = match.group(1)
+        if key not in host:
+            fail(f'Missing inventory host key for template substitution: {key}')
+        return str(host[key])
+
+    return re.sub(r'\{\{\s*host\.([a-zA-Z0-9_]+)\s*\}\}', replace, str(value))
+
 inventory = parse_yaml_file(inventory_path)
 
 host = inventory.get('host', {})
@@ -463,7 +815,7 @@ projects = inventory.get('projects', [])
 platform_names = inventory.get('platforms', [])
 network = inventory.get('network', {})
 
-required_host_keys = ['id', 'os', 'gpu', 'model_dir']
+required_host_keys = ['id', 'os', 'gpu', 'model_dir', 'ai_engine_model']
 for key in required_host_keys:
     if key not in host:
         fail(f'Missing inventory host key: {key}')
@@ -501,11 +853,12 @@ for platform_name in platform_names:
     env = container.get('env', {})
     profiles = container.get('profiles', [])
     ports = platform.get('ports', [])
+    runtime = platform.get('runtime', {})
 
     host_model_dir = str(host['model_dir'])
     resolved_mounts = []
     for mount in mounts:
-        mount_host = str(mount.get('host', '')).replace('{{ host.model_dir }}', host_model_dir)
+        mount_host = render_host_template(mount.get('host', ''), host)
         resolved_mounts.append({
             'host': mount_host,
             'container': mount['container'],
@@ -527,6 +880,21 @@ for platform_name in platform_names:
             'listen': listen,
         })
 
+    install_script = runtime.get('install_script')
+    service_name = runtime.get('service_name', platform['name'])
+    if not install_script:
+        fail(f'Platform runtime.install_script is required: {platform_name}')
+
+    resolved_env = {}
+    for key, value in env.items():
+        resolved_env[key] = render_host_template(value, host)
+
+    resolved_command = render_host_template(container['command'], host)
+
+    install_script_path = (repo_root / install_script).resolve()
+    if not install_script_path.exists():
+        fail(f'Runtime install script not found: {install_script_path}')
+
     platforms.append({
         'name': platform['name'],
         'project': platform['project'],
@@ -534,9 +902,11 @@ for platform_name in platform_names:
         'image': container['image'],
         'profiles': resolved_profiles,
         'mounts': resolved_mounts,
-        'env': env,
-        'command': container['command'],
+        'env': resolved_env,
+        'command': resolved_command,
         'ports': resolved_ports,
+        'runtime_install_script': str(install_script_path),
+        'runtime_service_name': service_name,
     })
 
 state = {
@@ -567,6 +937,7 @@ fi
 
 [[ -f "$inventory_file" ]] || fail "Inventory file not found: $inventory_file"
 require_command python3
+require_command sha256sum
 
 state_json="$(parse_state "$inventory_file")"
 
@@ -596,6 +967,8 @@ for index, platform in enumerate(state['platforms']):
     emit(f'PLATFORM_{index}_CONTAINER_NAME', platform['container_name'])
     emit(f'PLATFORM_{index}_IMAGE', platform['image'])
     emit(f'PLATFORM_{index}_COMMAND', platform['command'])
+    emit(f'PLATFORM_{index}_RUNTIME_INSTALL_SCRIPT', platform['runtime_install_script'])
+    emit(f'PLATFORM_{index}_RUNTIME_SERVICE_NAME', platform['runtime_service_name'])
     emit(f'PLATFORM_{index}_PROFILE_COUNT', len(platform['profiles']))
     emit(f'PLATFORM_{index}_MOUNT_COUNT', len(platform['mounts']))
     emit(f'PLATFORM_{index}_ENV_COUNT', len(platform['env']))
@@ -629,6 +1002,7 @@ if [[ "$MODE" == "apply" ]]; then
     require_command lxc
     require_lxd_storage_ready
     require_lxd_network_ready
+    require_lxd_subid_ready
 fi
 
 for ((i = 0; i < PROJECT_COUNT; i++)); do
@@ -663,6 +1037,8 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     container_var="PLATFORM_${i}_CONTAINER_NAME"
     image_var="PLATFORM_${i}_IMAGE"
     command_var="PLATFORM_${i}_COMMAND"
+    runtime_install_script_var="PLATFORM_${i}_RUNTIME_INSTALL_SCRIPT"
+    runtime_service_name_var="PLATFORM_${i}_RUNTIME_SERVICE_NAME"
     profile_count_var="PLATFORM_${i}_PROFILE_COUNT"
     mount_count_var="PLATFORM_${i}_MOUNT_COUNT"
     env_count_var="PLATFORM_${i}_ENV_COUNT"
@@ -674,6 +1050,8 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     image_name="${!image_var}"
     resolved_image_name="$image_name"
     command_value="${!command_var}"
+    runtime_install_script="${!runtime_install_script_var}"
+    runtime_service_name="${!runtime_service_name_var}"
     profile_count="${!profile_count_var}"
     mount_count="${!mount_count_var}"
     env_count="${!env_count_var}"
@@ -687,12 +1065,74 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
         profile_var="PLATFORM_${i}_PROFILE_${p}"
         profile_args+=("${!profile_var}")
     done
+    profile_csv="$(join_by_comma "${profile_args[@]}")"
+
+    desired_env_keys=()
+    for ((e = 0; e < env_count; e++)); do
+        env_key_var="PLATFORM_${i}_ENV_${e}_KEY"
+        desired_env_keys+=("${!env_key_var}")
+    done
+
+    desired_mount_devices=()
+    for ((m = 0; m < mount_count; m++)); do
+        desired_mount_devices+=("disk-${platform_name}-${m}")
+    done
+
+    desired_proxy_devices=()
+    for ((p = 0; p < port_count; p++)); do
+        desired_proxy_devices+=("proxy-${platform_name}-${p}")
+    done
+
+    runtime_hash="$(
+        {
+            printf 'service_name=%s\n' "$runtime_service_name"
+            printf 'command=%s\n' "$command_value"
+            printf 'install_script_hash=%s\n' "$(hash_file "$runtime_install_script")"
+
+            for ((e = 0; e < env_count; e++)); do
+                env_key_var="PLATFORM_${i}_ENV_${e}_KEY"
+                env_value_var="PLATFORM_${i}_ENV_${e}_VALUE"
+                printf 'env=%s|%s\n' "${!env_key_var}" "${!env_value_var}"
+            done
+        } | hash_text
+    )"
 
     for profile_name in "${profile_args[@]}"; do
         if [[ "$profile_name" == "$GPU_PROFILE" ]]; then
             ensure_project_gpu_profile "$project_name" "$GPU_PROFILE" "$GPU_PROFILE_FILE"
         fi
     done
+
+    desired_state_hash="$(
+        {
+            printf 'image=%s\n' "$image_name"
+            printf 'command=%s\n' "$command_value"
+
+            for profile_name in "${profile_args[@]}"; do
+                printf 'profile=%s\n' "$profile_name"
+            done
+
+            for ((m = 0; m < mount_count; m++)); do
+                mount_host_var="PLATFORM_${i}_MOUNT_${m}_HOST"
+                mount_container_var="PLATFORM_${i}_MOUNT_${m}_CONTAINER"
+                mount_ro_var="PLATFORM_${i}_MOUNT_${m}_READONLY"
+                printf 'mount=%s|%s|%s\n' "${!mount_host_var}" "${!mount_container_var}" "${!mount_ro_var}"
+            done
+
+            for ((e = 0; e < env_count; e++)); do
+                env_key_var="PLATFORM_${i}_ENV_${e}_KEY"
+                env_value_var="PLATFORM_${i}_ENV_${e}_VALUE"
+                printf 'env=%s|%s\n' "${!env_key_var}" "${!env_value_var}"
+            done
+
+            for ((p = 0; p < port_count; p++)); do
+                host_port_var="PLATFORM_${i}_PORT_${p}_HOST"
+                container_port_var="PLATFORM_${i}_PORT_${p}_CONTAINER"
+                listen_var="PLATFORM_${i}_PORT_${p}_LISTEN"
+                printf 'port=%s|%s|%s\n' "${!host_port_var}" "${!container_port_var}" "${!listen_var}"
+            done
+        } | hash_text
+    )"
 
     if [[ "$MODE" == "apply" ]]; then
         require_command lxc
@@ -701,25 +1141,32 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
             init_args=(lxc init "$resolved_image_name" "$container_name" --project "$project_name")
             run_cmd "${init_args[@]}"
         else
-            log "Container exists and will be replaced: $project_name/$container_name"
-            replace_container "$project_name" "$container_name" "$resolved_image_name" "$snapshot_name"
+            current_state_hash="$(lxc config get "$container_name" user.iac.desired_state_hash --project "$project_name" 2>/dev/null || true)"
+            if [[ "$current_state_hash" == "$desired_state_hash" ]]; then
+                log "Desired state unchanged; keeping container: $project_name/$container_name"
+            else
+                log "Container exists and desired state changed; replacing: $project_name/$container_name"
+                replace_container "$project_name" "$container_name" "$resolved_image_name" "$snapshot_name"
+            fi
         fi
     else
-        log "Plan includes replacement workflow if container exists: $project_name/$container_name"
-        snapshot_container "$project_name" "$container_name" "$snapshot_name"
-        run_cmd lxc stop "$container_name" --project "$project_name" --force
-        run_cmd lxc delete "$container_name" --project "$project_name"
+        log "Plan includes conditional replacement workflow for changed containers: $project_name/$container_name"
+        printf '[plan] compare desired-state hash for %q/%q and replace only when changed\n' "$project_name" "$container_name"
+        printf '[plan] lxc snapshot create %q %q --project %q (only before replacement)\n' "$container_name" "$snapshot_name" "$project_name"
+        printf '[plan] lxc stop %q --project %q --force (only before replacement)\n' "$container_name" "$project_name"
+        printf '[plan] lxc delete %q --project %q (only before replacement)\n' "$container_name" "$project_name"
         init_args=(lxc init "$image_name" "$container_name" --project "$project_name")
         run_cmd "${init_args[@]}"
     fi
 
     if (( profile_count > 0 )); then
-        profile_assign_args=(lxc profile assign "$container_name" --project "$project_name")
-        for profile_name in "${profile_args[@]}"; do
-            profile_assign_args+=("$profile_name")
-        done
+        profile_assign_args=(lxc profile assign "$container_name" "$profile_csv" --project "$project_name")
         run_cmd "${profile_assign_args[@]}"
     fi
+
+    remove_stale_env_keys "$project_name" "$container_name" "${desired_env_keys[@]}"
+    remove_stale_managed_devices "$project_name" "$container_name" "disk-${platform_name}-" "${desired_mount_devices[@]}"
+    remove_stale_managed_devices "$project_name" "$container_name" "proxy-${platform_name}-" "${desired_proxy_devices[@]}"
 
     for ((m = 0; m < mount_count; m++)); do
         mount_host_var="PLATFORM_${i}_MOUNT_${m}_HOST"
@@ -728,12 +1175,25 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
         device_name="disk-${platform_name}-${m}"
         readonly_flag="${!mount_ro_var}"
 
-        run_cmd lxc config device remove "$container_name" "$device_name" --project "$project_name" || true
-        device_args=(lxc config device add "$container_name" "$device_name" disk --project "$project_name" source "${!mount_host_var}" path "${!mount_container_var}")
-        if [[ "$readonly_flag" == "true" ]]; then
-            device_args+=(readonly=true)
+        current_source="$(container_device_get "$project_name" "$container_name" "$device_name" source)"
+        current_path="$(container_device_get "$project_name" "$container_name" "$device_name" path)"
+        current_readonly="$(container_device_get "$project_name" "$container_name" "$device_name" readonly)"
+        [[ -n "$current_readonly" ]] || current_readonly="false"
+
+        if ! container_has_device "$project_name" "$container_name" "$device_name"; then
+            device_args=(lxc config device add "$container_name" "$device_name" disk "source=${!mount_host_var}" "path=${!mount_container_var}" --project "$project_name")
+            if [[ "$readonly_flag" == "true" ]]; then
+                device_args+=(readonly=true)
+            fi
+            run_cmd "${device_args[@]}"
+        elif [[ "$current_source" != "${!mount_host_var}" || "$current_path" != "${!mount_container_var}" || "$current_readonly" != "$readonly_flag" ]]; then
+            run_cmd lxc config device remove "$container_name" "$device_name" --project "$project_name"
+            device_args=(lxc config device add "$container_name" "$device_name" disk "source=${!mount_host_var}" "path=${!mount_container_var}" --project "$project_name")
+            if [[ "$readonly_flag" == "true" ]]; then
+                device_args+=(readonly=true)
+            fi
+            run_cmd "${device_args[@]}"
         fi
-        run_cmd "${device_args[@]}"
     done
 
     for ((e = 0; e < env_count; e++)); do
@@ -743,6 +1203,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     done
 
     run_cmd lxc config set "$container_name" user.command "$command_value" --project "$project_name"
+    run_cmd lxc config set "$container_name" user.iac.desired_state_hash "$desired_state_hash" --project "$project_name"
 
     for ((p = 0; p < port_count; p++)); do
         host_port_var="PLATFORM_${i}_PORT_${p}_HOST"
@@ -751,19 +1212,26 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
         proxy_name="proxy-${platform_name}-${p}"
         connect_target="tcp:127.0.0.1:${!container_port_var}"
         listen_target="tcp:${!listen_var}:${!host_port_var}"
-        run_cmd lxc config device remove "$container_name" "$proxy_name" --project "$project_name" || true
-        run_cmd lxc config device add "$container_name" "$proxy_name" proxy --project "$project_name" listen="$listen_target" connect="$connect_target"
+        current_listen="$(container_device_get "$project_name" "$container_name" "$proxy_name" listen)"
+        current_connect="$(container_device_get "$project_name" "$container_name" "$proxy_name" connect)"
+
+        if ! container_has_device "$project_name" "$container_name" "$proxy_name"; then
+            run_cmd lxc config device add "$container_name" "$proxy_name" proxy "listen=$listen_target" "connect=$connect_target" --project "$project_name"
+        elif [[ "$current_listen" != "$listen_target" || "$current_connect" != "$connect_target" ]]; then
+            run_cmd lxc config device remove "$container_name" "$proxy_name" --project "$project_name"
+            run_cmd lxc config device add "$container_name" "$proxy_name" proxy "listen=$listen_target" "connect=$connect_target" --project "$project_name"
+        fi
     done
 
     if [[ "$MODE" == "apply" ]]; then
-        if container_running "$project_name" "$container_name"; then
-            run_cmd lxc restart "$container_name" --project "$project_name"
-        else
+        if ! container_running "$project_name" "$container_name"; then
             run_cmd lxc start "$container_name" --project "$project_name"
         fi
     else
         run_cmd lxc start "$container_name" --project "$project_name"
     fi
+
+    ensure_runtime_managed "$project_name" "$container_name" "$platform_name" "$runtime_service_name" "$command_value" "$runtime_install_script" "$env_count" "$i" "$runtime_hash"
 done
 
 log "Reconciliation complete"

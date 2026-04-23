@@ -6,6 +6,7 @@ host:
   ram_gb: 32
   storage_root: /srv
   model_dir: /srv/models
+  ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
 
 projects:
   - ai-infra

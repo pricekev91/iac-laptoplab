@@ -19,9 +19,13 @@ container:
       container: /models
       readonly: true
   env:
-    LLAMA_MODEL: /models/default.gguf
+    AI_ENGINE_MODEL: /models/{{ host.ai_engine_model }}
   command: >
-    /usr/local/bin/llama-server --model $LLAMA_MODEL --host 0.0.0.0 --port 8080
+    /usr/local/bin/ai-engine --model $AI_ENGINE_MODEL --host 0.0.0.0 --port 8080
+
+runtime:
+  service_name: ai-engine
+  install_script: scripts/provision-ai-engine.bash
 
 ports:
   - host: 8080

@@ -115,6 +115,7 @@ iac-laptoplab/
 ├── inventory/          # Host-specific YAML configs
 ├── platforms/          # Declarative container definitions
 ├── profiles/           # LXD profile definitions
+├── scripts/            # Runtime provisioning scripts executed inside containers
 ├── docs/
 │   └── architecture.md
 ├── apply.bash          # Inventory-driven apply runner
@@ -134,6 +135,7 @@ host:
   ram_gb: 32
   storage_root: /srv
   model_dir: /srv/models
+  ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
 
 projects:
   - ai-infra
@@ -151,6 +153,7 @@ Contract:
 
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
 - `host.model_dir` is the canonical shared GGUF storage root for both `ai-infra` and `ai-dev`
+- `host.ai_engine_model` selects the model filename mounted into the engine runtime
 - `projects` defines required LXD projects
 - `platforms` defines which platform YAMLs to apply
 - `network.expose_ui` controls localhost-only versus LAN binding policy
@@ -181,9 +184,13 @@ container:
       container: /models
       readonly: true
   env:
-    LLAMA_MODEL: /models/default.gguf
+    AI_ENGINE_MODEL: /models/default.gguf
   command: >
-    /usr/local/bin/llama-server --model $LLAMA_MODEL --host 0.0.0.0 --port 8080
+    /usr/local/bin/ai-engine --model $AI_ENGINE_MODEL --host 0.0.0.0 --port 8080
+
+runtime:
+  service_name: ai-engine
+  install_script: scripts/provision-ai-engine.bash
 
 ports:
   - host: 8080
@@ -216,7 +223,11 @@ container:
   env:
     BACKEND_URL: http://llama.ai-infra:8080
   command: >
-    /usr/local/bin/openwebui --host 0.0.0.0 --port 3000
+    /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
+
+runtime:
+  service_name: ai-presentation
+  install_script: scripts/provision-openwebui.bash
 
 ports:
   - host: 3000
@@ -292,12 +303,25 @@ Properties:
 - GPU access is passed through via profiles
 - Build and update operations are allowed to use the network; field operation is expected to be offline
 
+### 5.2.1 Idempotent Rerun Contract
+
+The operator contract is that a normal rerun of `./apply.bash inventory/<host>.yaml` should converge quickly when nothing material has changed.
+
+Required behavior:
+
+- unchanged project and container state must not trigger destructive replacement
+- unchanged runtime install scripts must not trigger repeated package index downloads or source archive downloads
+- unchanged runtime service definitions must not trigger unnecessary restarts
+- failed or incomplete provisioning must be repairable by rerunning apply without manual cleanup
+
+This means runtime provisioning inside containers must behave like a convergent repair step rather than a one-shot bootstrap step. Installers are expected to reuse prior package installs, extracted source trees, virtual environments, and built artifacts whenever their declared inputs are unchanged.
+
 ### 5.3 Deployment Flow
 
 - Inventory selects host profile
 - Apply runner provisions projects, containers, mounts, and runtime settings
 - Production containers are replaced rather than mutated in place when significant platform changes are applied
-- Services start deterministically
+- Services start deterministically and are restarted only when their managed inputs change or when repair is required
 
 ### 5.4 Snapshot and Rollback Flow
 
