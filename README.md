@@ -20,12 +20,18 @@ Operationally, the end-state should feel like one command from a fresh host, whi
 - `apply.bash` validates the host state, invokes the OS bootstrap path when first-run LXD prerequisites are missing, and then reconciles the LXD projects, profiles, containers, mounts, and service wiring
 - the top-level workflow should be safe to rerun, with bootstrap handling first-time host preparation and apply handling ongoing reconciliation
 
+Idempotency is a design requirement for both layers:
+
+- bootstrap must be safe to rerun on a partially prepared host and either converge cleanly or fail with an explicit prerequisite error
+- apply must be safe to rerun against an already bootstrapped host and converge the declared LXD state without hidden one-time assumptions
+
 ## Current Scope
 
 - Linux host bootstrap for Arch-family and Debian-family systems
 - LXD projects for infrastructure and development isolation
 - Declarative platform definitions for separate LLM, web, and agent services
 - Inventory-driven provisioning with deterministic, auditable state
+- Idempotent bootstrap and apply behavior as a first-class requirement
 - Offline-first operation, with explicit handling for mirrored artifacts and model storage
 
 ## Repository Layout

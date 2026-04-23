@@ -132,7 +132,7 @@ ensure_host_bootstrapped() {
     fi
 
     bootstrap_script="$(bootstrap_script_for_os "$host_os")"
-    [[ -x "$bootstrap_script" ]] || fail "Bootstrap script is not executable: $bootstrap_script"
+    [[ -f "$bootstrap_script" ]] || fail "Bootstrap script not found: $bootstrap_script"
 
     if [[ ${EUID} -ne 0 ]]; then
         require_command sudo

@@ -15,6 +15,7 @@ The system must:
 - Be hardware-agnostic across supported CPU and GPU combinations
 - Be reproducible, auditable, and long-lived
 - Support snapshots and rollback as first-class lifecycle operations
+- Require idempotent bootstrap and apply workflows, or explicit prerequisite failures when idempotency cannot be achieved automatically
 
 ### 1.3 Long-Term Objective
 
@@ -252,6 +253,7 @@ Operator experience target:
 - One command from the operator point of view
 - Multiple focused scripts under the hood for bootstrap, validation, and reconciliation
 - Safe reruns after the first successful bootstrap
+- Explicit idempotency guarantees for both bootstrap and apply stages
 
 Execution flow:
 

@@ -19,6 +19,18 @@ fail() {
     exit 1
 }
 
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+path_is_empty_dir() {
+    local dir_path="$1"
+
+    [[ -d "$dir_path" ]] || return 1
+    find "$dir_path" -mindepth 1 -maxdepth 1 | read -r _ && return 1
+    return 0
+}
+
 require_root() {
     if [[ ${EUID} -ne 0 ]]; then
         fail "Run this script as root or with sudo"
@@ -60,6 +72,7 @@ ensure_arch_family() {
 
 install_packages() {
     local packages=(
+        kmod
         lxd
         lxcfs
         dnsmasq
@@ -92,6 +105,32 @@ wait_for_lxd() {
     done
 
     fail "LXD daemon did not become ready in time"
+}
+
+require_kernel_module_tree() {
+    local running_kernel
+    local modules_dir
+
+    running_kernel="$(uname -r)"
+    modules_dir="/usr/lib/modules/${running_kernel}"
+
+    if [[ -d "$modules_dir" ]]; then
+        return 0
+    fi
+
+    fail "No kernel module tree exists for the running kernel ${running_kernel}. Reboot into an installed kernel or reinstall the matching CachyOS kernel package set before rerunning bootstrap."
+}
+
+ensure_bridge_support() {
+    require_command modprobe
+    require_kernel_module_tree
+
+    if modprobe bridge >/dev/null 2>&1; then
+        log "Linux bridge kernel support ready"
+        return 0
+    fi
+
+    fail "Unable to load the Linux bridge kernel module for $(uname -r). Reboot into the installed kernel or reinstall the matching CachyOS kernel packages before rerunning bootstrap."
 }
 
 ensure_lxd_group_access() {
@@ -147,6 +186,15 @@ storage_pool_status() {
     '
 }
 
+network_status() {
+    local network="$1"
+
+    lxc network show "$network" | awk '
+        /^status:/ { print $2; found=1; exit }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
 network_exists() {
     local network="$1"
 
@@ -160,23 +208,63 @@ network_ready() {
 }
 
 ensure_lxd_storage_pool() {
+    local pool_status=""
+
     if storage_pool_exists "$LXD_STORAGE_POOL"; then
-        log "LXD storage pool already present: $LXD_STORAGE_POOL"
-    else
-        log "Creating LXD storage pool: $LXD_STORAGE_POOL"
-        install -d -m 0711 "$LXD_STORAGE_DIR/storage-pools"
-        install -d -m 0711 "$LXD_STORAGE_POOL_DIR"
-        lxc storage create "$LXD_STORAGE_POOL" dir source="$LXD_STORAGE_POOL_DIR"
+        pool_status="$(storage_pool_status "$LXD_STORAGE_POOL" || true)"
+        case "${pool_status,,}" in
+            available|created)
+                log "LXD storage pool already present: $LXD_STORAGE_POOL ($pool_status)"
+                return 0
+                ;;
+            unavailable)
+                log "Resetting unavailable LXD storage pool: $LXD_STORAGE_POOL"
+                lxc storage delete "$LXD_STORAGE_POOL"
+                ;;
+            *)
+                fail "Unexpected LXD storage pool status for $LXD_STORAGE_POOL: ${pool_status:-unknown}"
+                ;;
+        esac
     fi
+
+    if [[ -e "$LXD_STORAGE_POOL_DIR" ]]; then
+        if path_is_empty_dir "$LXD_STORAGE_POOL_DIR"; then
+            log "Removing stale empty storage pool directory: $LXD_STORAGE_POOL_DIR"
+            rmdir "$LXD_STORAGE_POOL_DIR"
+        else
+            fail "Storage pool path already exists and is not empty: $LXD_STORAGE_POOL_DIR"
+        fi
+    fi
+
+    log "Creating LXD storage pool: $LXD_STORAGE_POOL"
+    install -d -m 0711 "$LXD_STORAGE_DIR/storage-pools"
+    lxc storage create "$LXD_STORAGE_POOL" dir source="$LXD_STORAGE_POOL_DIR"
 }
 
 ensure_lxd_network() {
+    local bridge_status=""
+
+    ensure_bridge_support
+
     if network_exists "$LXD_NETWORK"; then
-        log "LXD network already present: $LXD_NETWORK"
-    else
-        log "Creating LXD bridge network: $LXD_NETWORK"
-        lxc network create "$LXD_NETWORK" ipv4.address="$LXD_NETWORK_IPV4" ipv4.nat=true ipv6.address=none
+        bridge_status="$(network_status "$LXD_NETWORK" || true)"
+        case "${bridge_status,,}" in
+            available|created)
+                log "LXD network already present: $LXD_NETWORK ($bridge_status)"
+                return 0
+                ;;
+            unavailable)
+                log "Resetting unavailable LXD network: $LXD_NETWORK"
+                lxc network delete "$LXD_NETWORK"
+                ;;
+            *)
+                fail "Unexpected LXD network status for $LXD_NETWORK: ${bridge_status:-unknown}"
+                ;;
+        esac
     fi
+
+    log "Creating LXD bridge network: $LXD_NETWORK"
+    lxc network create "$LXD_NETWORK" ipv4.address="$LXD_NETWORK_IPV4" ipv4.nat=true ipv6.address=none
 }
 
 ensure_default_profile() {
@@ -192,6 +280,7 @@ ensure_default_profile() {
 
 validate_lxd_prerequisites() {
     local storage_status
+    local bridge_status
 
     storage_status="$(storage_pool_status "$LXD_STORAGE_POOL")" || fail "Unable to determine status for LXD storage pool: $LXD_STORAGE_POOL"
     case "${storage_status,,}" in
@@ -203,10 +292,19 @@ validate_lxd_prerequisites() {
             ;;
     esac
 
+    bridge_status="$(network_status "$LXD_NETWORK")" || fail "Unable to determine status for LXD network: $LXD_NETWORK"
+    case "${bridge_status,,}" in
+        available|created)
+            ;;
+        *)
+            fail "LXD network '$LXD_NETWORK' is not ready (status: $bridge_status)"
+            ;;
+    esac
+
     if network_ready "$LXD_NETWORK"; then
         log "LXD network ready: $LXD_NETWORK"
     else
-        fail "LXD network '$LXD_NETWORK' is not ready"
+        fail "LXD network '$LXD_NETWORK' exists but is not operational"
     fi
 }
 
@@ -236,6 +334,7 @@ main() {
     install_packages
     enable_services
     wait_for_lxd
+    ensure_bridge_support
     ensure_lxd_group_access "$target_user"
     ensure_shared_layout
     ensure_lxd_initialized
