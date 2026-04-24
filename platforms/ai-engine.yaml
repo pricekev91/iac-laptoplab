@@ -28,6 +28,7 @@ runtime:
   install_script: scripts/provision-ai-engine.bash
 
 migration:
+  legacy_project: ai-infra
   legacy_container_name: llama
 
 ports:

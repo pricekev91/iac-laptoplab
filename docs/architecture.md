@@ -199,6 +199,7 @@ runtime:
   install_script: scripts/provision-ai-engine.bash
 
 migration:
+  legacy_project: ai-infra
   legacy_container_name: llama
 
 ports:
@@ -239,6 +240,7 @@ runtime:
   install_script: scripts/provision-openwebui.bash
 
 migration:
+  legacy_project: ai-dev
   legacy_container_name: openwebui
 
 ports:

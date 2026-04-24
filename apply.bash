@@ -225,7 +225,7 @@ project_profile_exists() {
     lxc profile show "$profile" --project "$project" >/dev/null 2>&1
 }
 
-project_rename_if_needed() {
+project_cleanup_if_migrated() {
     local from_project="$1"
     local to_project="$2"
 
@@ -233,7 +233,7 @@ project_rename_if_needed() {
     [[ "$from_project" != "$to_project" ]] || return 0
 
     if [[ "$MODE" == "plan" ]]; then
-        printf '[plan] rename project %q -> %q when legacy project exists and target is absent\n' "$from_project" "$to_project"
+        printf '[plan] delete legacy project %q after containers have been migrated to %q and the legacy project is empty\n' "$from_project" "$to_project"
         return 0
     fi
 
@@ -241,13 +241,17 @@ project_rename_if_needed() {
         return 0
     fi
 
-    if project_exists "$to_project"; then
-        log "Target project already present; leaving legacy project in place: $from_project"
+    if ! project_exists "$to_project"; then
         return 0
     fi
 
-    log "Rename project: $from_project -> $to_project"
-    run_cmd lxc project rename "$from_project" "$to_project"
+    if lxc list --project "$from_project" --format csv -c n 2>/dev/null | grep -q '.'; then
+        log "Legacy project still has instances; leaving in place for now: $from_project"
+        return 0
+    fi
+
+    log "Delete empty legacy project: $from_project"
+    run_cmd lxc project delete "$from_project"
 }
 
 container_config_keys() {
@@ -606,6 +610,11 @@ migrate_container_name_if_needed() {
 
     if ! container_exists "$legacy_project" "$legacy_container_name"; then
         return 0
+    fi
+
+    if container_running "$legacy_project" "$legacy_container_name"; then
+        log "Stop legacy container before migration: $legacy_project/$legacy_container_name"
+        run_cmd lxc stop "$legacy_container_name" --project "$legacy_project"
     fi
 
     log "Rename container: $legacy_project/$legacy_container_name -> $target_project/$target_container_name"
@@ -1088,12 +1097,6 @@ if [[ "$MODE" == "apply" ]]; then
     require_lxd_subid_ready
 fi
 
-for ((i = 0; i < PROJECT_MIGRATION_COUNT; i++)); do
-    project_migration_from_var="PROJECT_MIGRATION_${i}_FROM"
-    project_migration_to_var="PROJECT_MIGRATION_${i}_TO"
-    project_rename_if_needed "${!project_migration_from_var}" "${!project_migration_to_var}"
-done
-
 for ((i = 0; i < PROJECT_COUNT; i++)); do
     project_var="PROJECT_${i}"
     project_name="${!project_var}"
@@ -1261,6 +1264,10 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     remove_stale_env_keys "$project_name" "$container_name" "${desired_env_keys[@]}"
     remove_stale_managed_devices "$project_name" "$container_name" "disk-${platform_name}-" "${desired_mount_devices[@]}"
     remove_stale_managed_devices "$project_name" "$container_name" "proxy-${platform_name}-" "${desired_proxy_devices[@]}"
+    if [[ -n "$legacy_container_name" && "$legacy_container_name" != "$platform_name" ]]; then
+        remove_stale_managed_devices "$project_name" "$container_name" "disk-${legacy_container_name}-"
+        remove_stale_managed_devices "$project_name" "$container_name" "proxy-${legacy_container_name}-"
+    fi
 
     for ((m = 0; m < mount_count; m++)); do
         mount_host_var="PLATFORM_${i}_MOUNT_${m}_HOST"
@@ -1326,6 +1333,12 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     fi
 
     ensure_runtime_managed "$project_name" "$container_name" "$platform_name" "$runtime_service_name" "$command_value" "$runtime_install_script" "$env_count" "$i" "$runtime_hash"
+done
+
+for ((i = 0; i < PROJECT_MIGRATION_COUNT; i++)); do
+    project_migration_from_var="PROJECT_MIGRATION_${i}_FROM"
+    project_migration_to_var="PROJECT_MIGRATION_${i}_TO"
+    project_cleanup_if_migrated "${!project_migration_from_var}" "${!project_migration_to_var}"
 done
 
 log "Reconciliation complete"
