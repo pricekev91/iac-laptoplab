@@ -225,6 +225,18 @@ project_profile_exists() {
     lxc profile show "$profile" --project "$project" >/dev/null 2>&1
 }
 
+container_config_get() {
+    local project="$1"
+    local name="$2"
+    local key="$3"
+
+    if [[ "$MODE" == "plan" ]]; then
+        return 0
+    fi
+
+    lxc config get "$name" "$key" --project "$project" 2>/dev/null || true
+}
+
 project_cleanup_if_migrated() {
     local from_project="$1"
     local to_project="$2"
@@ -251,7 +263,7 @@ project_cleanup_if_migrated() {
     fi
 
     log "Delete empty legacy project: $from_project"
-    run_cmd lxc project delete "$from_project"
+    run_cmd lxc project delete "$from_project" --force
 }
 
 container_config_keys() {
@@ -595,6 +607,7 @@ migrate_container_name_if_needed() {
     local legacy_container_name="$2"
     local target_project="$3"
     local target_container_name="$4"
+    local target_runtime_hash
 
     [[ -n "$legacy_container_name" ]] || return 0
     [[ "$legacy_project/$legacy_container_name" != "$target_project/$target_container_name" ]] || return 0
@@ -604,12 +617,19 @@ migrate_container_name_if_needed() {
         return 0
     fi
 
-    if container_exists "$target_project" "$target_container_name"; then
+    if ! container_exists "$legacy_project" "$legacy_container_name"; then
         return 0
     fi
 
-    if ! container_exists "$legacy_project" "$legacy_container_name"; then
-        return 0
+    if container_exists "$target_project" "$target_container_name"; then
+        target_runtime_hash="$(container_config_get "$target_project" "$target_container_name" user.iac.runtime_hash)"
+
+        if container_running "$target_project" "$target_container_name" || [[ -n "$target_runtime_hash" ]]; then
+            fail "Migration conflict: both $legacy_project/$legacy_container_name and $target_project/$target_container_name exist with meaningful state. Resolve the duplicate container before rerunning apply."
+        fi
+
+        log "Delete partial target container before migration: $target_project/$target_container_name"
+        run_cmd lxc delete "$target_container_name" --project "$target_project"
     fi
 
     if container_running "$legacy_project" "$legacy_container_name"; then
@@ -618,7 +638,11 @@ migrate_container_name_if_needed() {
     fi
 
     log "Rename container: $legacy_project/$legacy_container_name -> $target_project/$target_container_name"
-    run_cmd lxc move "$legacy_container_name" "$target_container_name" --project "$legacy_project" --target-project "$target_project"
+    if [[ "$legacy_project" == "$target_project" ]]; then
+        run_cmd lxc move "$legacy_container_name" "$target_container_name" --project "$legacy_project"
+    else
+        run_cmd lxc move "$legacy_container_name" "$target_container_name" --project "$legacy_project" --target-project "$target_project"
+    fi
 }
 
 resolve_image_alias() {
@@ -1152,6 +1176,13 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     log "Reconciling platform: $platform_name"
     snapshot_name="${SNAPSHOT_PREFIX}-$(date +%Y%m%d%H%M%S)-${platform_name}"
 
+    if [[ "$runtime_service_name" != "$container_name" ]]; then
+        migrate_container_name_if_needed "$project_name" "$runtime_service_name" "$project_name" "$container_name"
+        if [[ "$legacy_project_name" != "$project_name" ]]; then
+            migrate_container_name_if_needed "$legacy_project_name" "$runtime_service_name" "$project_name" "$container_name"
+        fi
+    fi
+
     migrate_container_name_if_needed "$project_name" "$legacy_container_name" "$project_name" "$container_name"
     if [[ "$legacy_project_name" != "$project_name" ]]; then
         migrate_container_name_if_needed "$legacy_project_name" "$legacy_container_name" "$project_name" "$container_name"
@@ -1264,6 +1295,10 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     remove_stale_env_keys "$project_name" "$container_name" "${desired_env_keys[@]}"
     remove_stale_managed_devices "$project_name" "$container_name" "disk-${platform_name}-" "${desired_mount_devices[@]}"
     remove_stale_managed_devices "$project_name" "$container_name" "proxy-${platform_name}-" "${desired_proxy_devices[@]}"
+    if [[ "$runtime_service_name" != "$platform_name" ]]; then
+        remove_stale_managed_devices "$project_name" "$container_name" "disk-${runtime_service_name}-"
+        remove_stale_managed_devices "$project_name" "$container_name" "proxy-${runtime_service_name}-"
+    fi
     if [[ -n "$legacy_container_name" && "$legacy_container_name" != "$platform_name" ]]; then
         remove_stale_managed_devices "$project_name" "$container_name" "disk-${legacy_container_name}-"
         remove_stale_managed_devices "$project_name" "$container_name" "proxy-${legacy_container_name}-"

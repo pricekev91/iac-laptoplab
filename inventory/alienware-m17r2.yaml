@@ -16,6 +16,8 @@ project_migrations:
     to: prod
   - from: ai-dev
     to: prod
+  - from: dev
+    to: prod
 
 platforms:
   - engine

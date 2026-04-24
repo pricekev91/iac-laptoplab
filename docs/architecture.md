@@ -147,6 +147,8 @@ project_migrations:
     to: prod
   - from: ai-dev
     to: prod
+  - from: dev
+    to: prod
 
 platforms:
   - engine
@@ -244,7 +246,7 @@ runtime:
   install_script: scripts/provision-openwebui.bash
 
 migration:
-  legacy_project: ai-dev
+  legacy_project: dev
   legacy_container_name: openwebui
 
 ports:
