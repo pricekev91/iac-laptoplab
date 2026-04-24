@@ -1,4 +1,4 @@
-name: ai-engine
+name: engine
 project: prod
 variant:
   default: cpu
@@ -9,7 +9,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: ai-engine
+  name: engine
   image: ubuntu:24.04
   profiles:
     - default

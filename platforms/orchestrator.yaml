@@ -1,0 +1,30 @@
+name: orchestrator
+project: prod
+variant:
+  default: cpu
+  supported:
+    - cpu
+    - nvidia
+    - amd
+  select_from: host.gpu
+
+container:
+  name: orchestrator
+  image: ubuntu:24.04
+  profiles:
+    - default
+  env:
+    N8N_HOST: 0.0.0.0
+    N8N_PORT: "5678"
+    N8N_PROTOCOL: http
+  command: >
+    /usr/local/bin/ai-orchestrator start
+
+runtime:
+  service_name: ai-orchestrator
+  install_script: scripts/provision-n8n.bash
+
+ports:
+  - host: 5678
+    container: 5678
+    bind_local_only: true

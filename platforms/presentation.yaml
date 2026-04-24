@@ -1,5 +1,5 @@
-name: ai-presentation
-project: dev
+name: presentation
+project: prod
 variant:
   default: cpu
   supported:
@@ -9,7 +9,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: ai-presentation
+  name: presentation
   image: ubuntu:24.04
   profiles:
     - default
@@ -18,7 +18,7 @@ container:
       container: /models
       readonly: true
   env:
-    BACKEND_URL: http://ai-engine.prod:8080
+    BACKEND_URL: http://engine.prod:8080
   command: >
     /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
 

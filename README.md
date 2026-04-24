@@ -16,8 +16,8 @@ The intended direction is to keep these services loosely coupled, inventory-driv
 
 Current naming contract:
 
-- projects represent environments: `prod`, `dev`
-- platform and container names represent service roles: `ai-engine`, `ai-presentation`, future `ai-logistics`
+- projects represent environments; today the inventory targets only `prod`
+- platform and container names represent service roles: `engine`, `presentation`, `orchestrator`, `agents`
 
 Operationally, the end-state should feel like one command from a fresh host, while still being implemented as modular scripts underneath:
 
@@ -34,8 +34,8 @@ Idempotency is a design requirement for both layers:
 ## Current Scope
 
 - Linux host bootstrap for Arch-family and Debian-family systems
-- LXD projects for infrastructure and development isolation
-- Declarative platform definitions for separate LLM, web, and agent services
+- LXD projects with a single active `prod` environment and optional future expansion
+- Declarative platform definitions for engine, presentation, orchestrator, and agent services
 - Inventory-driven provisioning with deterministic, auditable state
 - Idempotent bootstrap and apply behavior as a first-class requirement
 - Offline-first operation, with explicit handling for mirrored artifacts and model storage
@@ -79,10 +79,14 @@ Seed files included now:
 
 - `bootstrap/arch-cachyos.bash`
 - `inventory/alienware-m17r2.yaml`
-- `platforms/ai-engine.yaml`
-- `platforms/ai-presentation.yaml`
+- `platforms/engine.yaml`
+- `platforms/presentation.yaml`
+- `platforms/orchestrator.yaml`
+- `platforms/agents.yaml`
 - `scripts/provision-ai-engine.bash`
 - `scripts/provision-openwebui.bash`
+- `scripts/provision-n8n.bash`
+- `scripts/provision-crewai.bash`
 - `profiles/gpu-nvidia.yaml`
 - `profiles/gpu-amd.yaml`
 - `profiles/gpu-intel.yaml`
@@ -99,8 +103,8 @@ The previous repo state was preserved locally as:
 
 ## Next Build Targets
 
-1. Finish the naming migration from implementation-specific labels to stable service-role labels.
-2. Add production and dev service hardening.
-3. Add monitoring and promotion workflows.
-4. Add mirrored artifact and package cache support for stricter offline rebuild behavior.
+1. Harden the new `orchestrator` and `agents` services beyond baseline package install and startup.
+2. Add monitoring and promotion workflows.
+3. Add mirrored artifact and package cache support for stricter offline rebuild behavior.
+4. Reintroduce a separate `dev` environment only when there is a concrete need for it.
 5. Refine Intel GPU profile once Intel hardware is available.

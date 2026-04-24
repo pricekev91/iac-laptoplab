@@ -10,17 +10,18 @@ host:
 
 projects:
   - prod
-  - dev
 
 project_migrations:
   - from: ai-infra
     to: prod
   - from: ai-dev
-    to: dev
+    to: prod
 
 platforms:
-  - ai-engine
-  - ai-presentation
+  - engine
+  - presentation
+  - orchestrator
+  - agents
 
 network:
   expose_ui: false

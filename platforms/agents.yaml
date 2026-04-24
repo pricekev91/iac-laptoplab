@@ -1,0 +1,29 @@
+name: agents
+project: prod
+variant:
+  default: cpu
+  supported:
+    - cpu
+    - nvidia
+    - amd
+  select_from: host.gpu
+
+container:
+  name: agents
+  image: ubuntu:24.04
+  profiles:
+    - default
+  env:
+    AI_AGENTS_HOST: 0.0.0.0
+    AI_AGENTS_PORT: "7788"
+  command: >
+    /usr/local/bin/ai-agents
+
+runtime:
+  service_name: ai-agents
+  install_script: scripts/provision-crewai.bash
+
+ports:
+  - host: 7788
+    container: 7788
+    bind_local_only: true

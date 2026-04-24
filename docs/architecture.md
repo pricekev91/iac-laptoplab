@@ -31,8 +31,8 @@ A portable, deterministic AI platform that can:
 ### 2.1 Logical Layers
 
 - Host Layer: Minimal OS plus LXD substrate
-- Platform Layer: LXD projects `prod` and `dev`
-- Service Layer: Containers providing inference, UI, agentic services, and future orchestration
+- Platform Layer: LXD project `prod` today, with optional future `dev`
+- Service Layer: Containers providing inference, presentation, orchestration, and agentic services
 - Client Layer: Editors, browsers, and CLI tools consuming API and UI endpoints
 
 ### 2.2 Physical Layout
@@ -82,9 +82,11 @@ Each host runs:
 ### 3.3 AI Stack
 
 - `llama.cpp` now
+- `CrewAI` for agent workflows
+- `n8n` for orchestration workflows
 - Additional VLM or multimodal runtimes later after architecture review
 - GGUF model format today
-- Shared host model directory mounted read-only into both production and development containers
+- Shared host model directory mounted read-only into the engine and presentation containers
 
 ### 3.4 UI Stack
 
@@ -139,17 +141,18 @@ host:
 
 projects:
   - prod
-  - dev
 
 project_migrations:
   - from: ai-infra
     to: prod
   - from: ai-dev
-    to: dev
+    to: prod
 
 platforms:
-  - ai-engine
-  - ai-presentation
+  - engine
+  - presentation
+  - orchestrator
+  - agents
 
 network:
   expose_ui: false
@@ -158,18 +161,19 @@ network:
 Contract:
 
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
-- `host.model_dir` is the canonical shared GGUF storage root for both `prod` and `dev`
+- `host.model_dir` is the canonical shared GGUF storage root for engine and presentation workloads in `prod`
 - `host.ai_engine_model` selects the model filename mounted into the engine runtime
 - `projects` defines required LXD projects
+- `project_migrations` declares legacy projects to clean up after containers are moved into the current project layout
 - `platforms` defines which platform YAMLs to apply
 - `network.expose_ui` controls localhost-only versus LAN binding policy
 
 ### 4.3 Platform Definition Schema
 
-Example: `platforms/ai-engine.yaml`
+Example: `platforms/engine.yaml`
 
 ```yaml
-name: ai-engine
+name: engine
 project: prod
 variant:
   default: cpu
@@ -180,7 +184,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: ai-engine
+  name: engine
   image: images:ubuntu/24.04
   profiles:
     - default
@@ -208,11 +212,11 @@ ports:
     bind_local_only: true
 ```
 
-Example: `platforms/ai-presentation.yaml`
+Example: `platforms/presentation.yaml`
 
 ```yaml
-name: ai-presentation
-project: dev
+name: presentation
+project: prod
 variant:
   default: cpu
   supported:
@@ -222,7 +226,7 @@ variant:
   select_from: host.gpu
 
 container:
-  name: ai-presentation
+  name: presentation
   image: images:ubuntu/24.04
   profiles:
     - default
@@ -231,7 +235,7 @@ container:
       container: /models
       readonly: true
   env:
-    BACKEND_URL: http://ai-engine.prod:8080
+    BACKEND_URL: http://engine.prod:8080
   command: >
     /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
 
@@ -247,6 +251,50 @@ ports:
   - host: 3000
     container: 3000
     bind_local_only: true
+```
+
+Example: `platforms/orchestrator.yaml`
+
+```yaml
+name: orchestrator
+project: prod
+
+container:
+  name: orchestrator
+  image: ubuntu:24.04
+  profiles:
+    - default
+  env:
+    N8N_HOST: 0.0.0.0
+    N8N_PORT: 5678
+  command: >
+    /usr/local/bin/ai-orchestrator start
+
+runtime:
+  service_name: ai-orchestrator
+  install_script: scripts/provision-n8n.bash
+```
+
+Example: `platforms/agents.yaml`
+
+```yaml
+name: agents
+project: prod
+
+container:
+  name: agents
+  image: ubuntu:24.04
+  profiles:
+    - default
+  env:
+    AI_AGENTS_HOST: 0.0.0.0
+    AI_AGENTS_PORT: 7788
+  command: >
+    /usr/local/bin/ai-agents
+
+runtime:
+  service_name: ai-agents
+  install_script: scripts/provision-crewai.bash
 ```
 
 ### 4.4 LXD Profiles
@@ -332,7 +380,7 @@ This means runtime provisioning inside containers must behave like a convergent 
 
 ### 5.3 Deployment Flow
 
-- Inventory selects host profile
+- Inventory selects the host profile and active service set
 - Apply runner provisions projects, containers, mounts, and runtime settings
 - Production containers are replaced rather than mutated in place when significant platform changes are applied
 - Services start deterministically and are restarted only when their managed inputs change or when repair is required
@@ -379,11 +427,10 @@ This means runtime provisioning inside containers must behave like a convergent 
 ## 8. Security Model
 
 - LXD container isolation
-- Project-level separation between `prod` and `dev`
+- Single active `prod` project today, with optional future expansion to separate environments
 - Minimal host privileges
 - GPU access only where required
 - Local-only network exposure by default
-- `dev` must not communicate directly with `prod`
 - LAN exposure for production services is allowed when explicitly enabled and managed on the host
 
 ## 9. Automation Goals

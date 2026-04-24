@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+AI_AGENTS_ROOT="/opt/ai-agents"
+VENV_DIR="${AI_AGENTS_ROOT}/venv"
+APP_PATH="${AI_AGENTS_ROOT}/app.py"
+WRAPPER_PATH="/usr/local/bin/ai-agents"
+INSTALL_STAMP_PATH="${AI_AGENTS_ROOT}/.install-script.sha256"
+
+script_sha256() {
+    sha256sum "$0" | awk '{ print $1 }'
+}
+
+package_installed() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -Fq 'install ok installed'
+}
+
+ensure_apt_packages() {
+    local package
+    local missing_packages=()
+
+    for package in "$@"; do
+        if ! package_installed "$package"; then
+            missing_packages+=("$package")
+        fi
+    done
+
+    if (( ${#missing_packages[@]} == 0 )); then
+        return 0
+    fi
+
+    apt-get -o Acquire::ForceIPv4=true update
+    apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends "${missing_packages[@]}"
+}
+
+install_app() {
+    cat > "$APP_PATH" <<'EOF'
+from fastapi import FastAPI
+
+app = FastAPI(title="AI Agents")
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {
+        "service": "ai-agents",
+        "framework": "crewai",
+        "status": "ok",
+    }
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+EOF
+}
+
+install_wrapper() {
+    cat > "$WRAPPER_PATH" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+host="${AI_AGENTS_HOST:-0.0.0.0}"
+port="${AI_AGENTS_PORT:-7788}"
+
+exec /opt/ai-agents/venv/bin/uvicorn app:app --app-dir /opt/ai-agents --host "$host" --port "$port"
+EOF
+
+    chmod 0755 "$WRAPPER_PATH"
+}
+
+artifacts_ready() {
+    [[ -x "$VENV_DIR/bin/uvicorn" && -x "$WRAPPER_PATH" && -f "$APP_PATH" ]]
+}
+
+ensure_ipv4_preferred() {
+    local gai_conf="/etc/gai.conf"
+    local preference_line="precedence ::ffff:0:0/96  100"
+
+    if grep -Fqx "$preference_line" "$gai_conf" 2>/dev/null; then
+        return 0
+    fi
+
+    printf '\n%s\n' "$preference_line" >> "$gai_conf"
+}
+
+ensure_ipv4_preferred
+
+install -d -m 0755 "$AI_AGENTS_ROOT"
+
+current_script_sha="$(script_sha256)"
+installed_script_sha=""
+if [[ -f "$INSTALL_STAMP_PATH" ]]; then
+    installed_script_sha="$(cat "$INSTALL_STAMP_PATH")"
+fi
+
+if [[ "$installed_script_sha" == "$current_script_sha" ]] && artifacts_ready; then
+    install_app
+    install_wrapper
+    exit 0
+fi
+
+ensure_apt_packages \
+    build-essential \
+    ca-certificates \
+    python3 \
+    python3-pip \
+    python3-venv
+
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+    python3 -m venv "$VENV_DIR"
+fi
+
+if ! "$VENV_DIR/bin/pip" show crewai >/dev/null 2>&1; then
+    "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
+    "$VENV_DIR/bin/pip" install --upgrade crewai fastapi 'uvicorn[standard]'
+fi
+
+install_app
+install_wrapper
+printf '%s\n' "$current_script_sha" > "$INSTALL_STAMP_PATH"
