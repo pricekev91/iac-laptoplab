@@ -84,6 +84,13 @@ Current local service URLs:
 - AI Engine: `http://127.0.0.1:8080`
 - Agents: `http://127.0.0.1:7788`
 
+Known-good validation snapshot as of 2026-04-28:
+
+- `presentation` verified working through Open WebUI on `http://127.0.0.1:3000`
+- `orchestrator` verified working through n8n on `http://127.0.0.1:5678`
+- `engine` verified working through the AI Engine endpoint on `http://127.0.0.1:8080`
+- `agents` remains part of the declared architecture, but is not part of the current three-component known-good baseline
+
 The `orchestrator` runtime now installs `@bpmsoftwaresolutions/ai-engine-client` so n8n code nodes can call the deployed AI Engine directly. Keep the base URL in inventory and pass the API key at apply time, for example `AI_ENGINE_CLIENT_API_KEY=... ./apply.bash inventory/alienware-m17r2.yaml`.
 
 Seed files included now:
