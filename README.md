@@ -75,6 +75,17 @@ iac-laptoplab/
 
 The architectural baseline lives in `docs/architecture.md`.
 
+The current prod endpoint inventory, including canonical host URLs and observed live container addresses, lives in `docs/architecture.md#44-current-prod-endpoint-inventory`.
+
+Current local service URLs:
+
+- Open WebUI: `http://127.0.0.1:3000`
+- n8n: `http://127.0.0.1:5678`
+- AI Engine: `http://127.0.0.1:8080`
+- Agents: `http://127.0.0.1:7788`
+
+The `orchestrator` runtime now installs `@bpmsoftwaresolutions/ai-engine-client` so n8n code nodes can call the deployed AI Engine directly. Keep the base URL in inventory and pass the API key at apply time, for example `AI_ENGINE_CLIENT_API_KEY=... ./apply.bash inventory/alienware-m17r2.yaml`.
+
 Seed files included now:
 
 - `bootstrap/arch-cachyos.bash`

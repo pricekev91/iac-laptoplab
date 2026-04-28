@@ -138,6 +138,7 @@ host:
   storage_root: /srv
   model_dir: /srv/models
   ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
+  ai_engine_client_base_url: https://example.azurecontainerapps.io
 
 projects:
   - prod
@@ -165,10 +166,12 @@ Contract:
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
 - `host.model_dir` is the canonical shared GGUF storage root for engine and presentation workloads in `prod`
 - `host.ai_engine_model` selects the model filename mounted into the engine runtime
+- `host.ai_engine_client_base_url` selects the deployed AI Engine endpoint consumed by workflow clients
 - `projects` defines required LXD projects
 - `project_migrations` declares legacy projects to clean up after containers are moved into the current project layout
 - `platforms` defines which platform YAMLs to apply
 - `network.expose_ui` controls localhost-only versus LAN binding policy
+- `{{ env.NAME }}` may be used in platform templates for operator-supplied secrets such as API keys
 
 ### 4.3 Platform Definition Schema
 
@@ -269,6 +272,9 @@ container:
   env:
     N8N_HOST: 0.0.0.0
     N8N_PORT: 5678
+    AI_ENGINE_CLIENT_BASE_URL: "{{ host.ai_engine_client_base_url }}"
+    AI_ENGINE_CLIENT_API_KEY: "{{ env.AI_ENGINE_CLIENT_API_KEY }}"
+    NODE_FUNCTION_ALLOW_EXTERNAL: "@bpmsoftwaresolutions/ai-engine-client"
   command: >
     /usr/local/bin/ai-orchestrator start
 
@@ -276,6 +282,8 @@ runtime:
   service_name: ai-orchestrator
   install_script: scripts/provision-n8n.bash
 ```
+
+The orchestrator installer provisions both `n8n` and `@bpmsoftwaresolutions/ai-engine-client` globally so n8n code nodes can import the package directly. Supply the remote API key from the operator environment when applying the inventory instead of storing it in git.
 
 Example: `platforms/agents.yaml`
 
@@ -299,7 +307,37 @@ runtime:
   install_script: scripts/provision-crewai.bash
 ```
 
-### 4.4 LXD Profiles
+### 4.4 Current Prod Endpoint Inventory
+
+The stable URLs to document are the host-side LXD proxy bindings, not the container bridge IPs.
+
+Reason:
+
+- every platform declares `bind_local_only: true`
+- the active inventory sets `network.expose_ui: false`
+- the apply runner therefore resolves the host listen address to `127.0.0.1` for each declared port
+
+Current canonical host URLs:
+
+| Role | Container | Service | Host port | Canonical URL |
+| --- | --- | --- | --- | --- |
+| Inference API | `engine` | AI Engine | `8080` | `http://127.0.0.1:8080` |
+| Web UI | `presentation` | Open WebUI | `3000` | `http://127.0.0.1:3000` |
+| Workflow UI | `orchestrator` | n8n | `5678` | `http://127.0.0.1:5678` |
+| Agent API | `agents` | CrewAI / FastAPI | `7788` | `http://127.0.0.1:7788` |
+
+Observed container bridge endpoints on the current host as of 2026-04-28:
+
+| Container | Current state | Observed container URL | Notes |
+| --- | --- | --- | --- |
+| `presentation` | running | `http://10.126.64.50:3000` | Open WebUI direct container address observed from `lxc list --all-projects` |
+| `orchestrator` | running | `http://10.126.64.78:5678` | n8n direct container address observed from `lxc list --all-projects` |
+| `engine` | running | `http://10.126.64.107:8080` | AI Engine direct container address observed from `lxc list --all-projects` |
+| `agents` | running | unavailable | The container is running and the host proxy URL `http://127.0.0.1:7788` responds successfully, but `lxc list --all-projects` is not currently reporting a bridge IPv4 address |
+
+Use the host URLs above in operator-facing documentation because container bridge IPs are runtime details and may change after rebuild, restart, or migration.
+
+### 4.5 LXD Profiles
 
 Profiles live under `profiles/`:
 
@@ -313,7 +351,7 @@ Contract:
 - Containers requiring GPU include the generic `gpu` role, which the apply runner resolves to the concrete vendor profile
 - Variant selection remains in the platform definition, while GPU passthrough remains in the resolved LXD profile layer
 
-### 4.5 Apply Runner Contract
+### 4.6 Apply Runner Contract
 
 `apply.bash` performs deterministic, idempotent provisioning.
 

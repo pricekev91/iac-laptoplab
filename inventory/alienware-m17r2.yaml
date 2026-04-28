@@ -7,6 +7,7 @@ host:
   storage_root: /srv
   model_dir: /srv/models
   ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
+  ai_engine_client_base_url: https://55e8b585-6076-4992-a164-a5398899efdb-00-c56xlmp9cuq9.worf.replit.dev
 
 projects:
   - prod

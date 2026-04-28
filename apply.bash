@@ -780,6 +780,7 @@ parse_state() {
 
     python3 - "$inventory_path" "$SCRIPT_DIR" <<'PY'
 import json
+import os
 import pathlib
 import re
 import sys
@@ -903,14 +904,21 @@ def parse_yaml_file(path):
     lines = path.read_text().splitlines()
     return parse_yaml_lines(lines)
 
-def render_host_template(value, host):
+def render_template(value, host):
     def replace(match):
-        key = match.group(1)
-        if key not in host:
-            fail(f'Missing inventory host key for template substitution: {key}')
-        return str(host[key])
+        source = match.group(1)
+        key = match.group(2)
+        if source == 'host':
+            if key not in host:
+                fail(f'Missing inventory host key for template substitution: {key}')
+            return str(host[key])
+        if source == 'env':
+            if key not in os.environ:
+                fail(f'Missing operator environment variable for template substitution: {key}')
+            return os.environ[key]
+        fail(f'Unsupported template source: {source}')
 
-    return re.sub(r'\{\{\s*host\.([a-zA-Z0-9_]+)\s*\}\}', replace, str(value))
+    return re.sub(r'\{\{\s*(host|env)\.([a-zA-Z0-9_]+)\s*\}\}', replace, str(value))
 
 inventory = parse_yaml_file(inventory_path)
 
@@ -964,7 +972,7 @@ for platform_name in platform_names:
     host_model_dir = str(host['model_dir'])
     resolved_mounts = []
     for mount in mounts:
-        mount_host = render_host_template(mount.get('host', ''), host)
+        mount_host = render_template(mount.get('host', ''), host)
         resolved_mounts.append({
             'host': mount_host,
             'container': mount['container'],
@@ -993,9 +1001,9 @@ for platform_name in platform_names:
 
     resolved_env = {}
     for key, value in env.items():
-        resolved_env[key] = render_host_template(value, host)
+        resolved_env[key] = render_template(value, host)
 
-    resolved_command = render_host_template(container['command'], host)
+    resolved_command = render_template(container['command'], host)
 
     install_script_path = (repo_root / install_script).resolve()
     if not install_script_path.exists():
