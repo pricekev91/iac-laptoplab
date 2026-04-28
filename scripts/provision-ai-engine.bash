@@ -9,6 +9,10 @@ BACKEND_REPO_DIR="${AI_ENGINE_ROOT}/backend"
 BUILD_DIR="${BACKEND_REPO_DIR}/build"
 WRAPPER_PATH="/usr/local/bin/ai-engine"
 BACKEND_PATH="/usr/local/libexec/ai-engine-backend"
+MANAGER_VENV_DIR="${AI_ENGINE_ROOT}/venv"
+MANAGER_APP_PATH="${AI_ENGINE_ROOT}/engine_manager.py"
+STATE_DIR="${AI_ENGINE_ROOT}/state"
+ACTIVE_MODEL_PATH="${STATE_DIR}/active-model.txt"
 AI_ENGINE_DATA_DIR="${AI_ENGINE_ROOT}/data"
 AI_ENGINE_PROJECTS_DIR="${AI_ENGINE_DATA_DIR}/projects"
 LEGO_PROJECT_DIR="${AI_ENGINE_PROJECTS_DIR}/lego-project"
@@ -364,20 +368,197 @@ Plan for an expected delivery window ending in August 2026, with a first usable 
 EOF
 }
 
+install_manager_app() {
+    cat > "$MANAGER_APP_PATH" <<'EOF'
+import os
+import socket
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+BACKEND_PATH = os.environ.get("AI_ENGINE_BACKEND_PATH", "/usr/local/libexec/ai-engine-backend")
+MODEL_PATH = os.environ.get("AI_ENGINE_MODEL", "/models/default.gguf")
+HOST = os.environ.get("AI_ENGINE_HOST", "0.0.0.0")
+PORT = int(os.environ.get("AI_ENGINE_PORT", "8080"))
+STATE_PATH = Path(os.environ.get("AI_ENGINE_ACTIVE_MODEL_PATH", "/opt/ai-engine/state/active-model.txt"))
+
+
+class ActivateRequest(BaseModel):
+    model_path: str
+
+
+class EngineSupervisor:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._process: subprocess.Popen[str] | None = None
+        self._current_model: str | None = None
+        self._monitor = threading.Thread(target=self._monitor_loop, daemon=True)
+
+    def _resolve_model(self, requested: str | None = None) -> str:
+        if requested:
+            candidate = requested
+        elif STATE_PATH.exists():
+            candidate = STATE_PATH.read_text().strip()
+        else:
+            candidate = MODEL_PATH
+
+        if not candidate:
+            raise RuntimeError("No active model path configured")
+
+        if not Path(candidate).exists():
+            raise RuntimeError(f"Model path does not exist: {candidate}")
+
+        return candidate
+
+    def _persist_model(self, model_path: str) -> None:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_text(model_path + "\n")
+
+    def _wait_for_backend(self, timeout_seconds: int = 60) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(1)
+                if probe.connect_ex(("127.0.0.1", PORT)) == 0:
+                    return
+            time.sleep(1)
+        raise RuntimeError(f"AI engine backend did not become ready on 127.0.0.1:{PORT}")
+
+    def _stop_locked(self) -> None:
+        if self._process is None:
+            return
+        if self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=10)
+        self._process = None
+
+    def start(self, requested_model: str | None = None) -> dict[str, object]:
+        model_path = self._resolve_model(requested_model)
+        with self._lock:
+            if self._process is not None and self._process.poll() is None and self._current_model == model_path:
+                return self.status()
+
+            self._stop_locked()
+            self._process = subprocess.Popen(
+                [
+                    BACKEND_PATH,
+                    "--model",
+                    model_path,
+                    "--host",
+                    HOST,
+                    "--port",
+                    str(PORT),
+                ]
+            )
+            self._current_model = model_path
+            self._persist_model(model_path)
+
+        self._wait_for_backend()
+        return self.status()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_locked()
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            running = self._process is not None and self._process.poll() is None
+            pid = self._process.pid if running and self._process is not None else None
+            return {
+                "status": "ok" if running else "stopped",
+                "running": running,
+                "pid": pid,
+                "model_path": self._current_model,
+                "port": PORT,
+            }
+
+    def _monitor_loop(self) -> None:
+        while not self._stop_event.wait(5):
+            restart_model = None
+            with self._lock:
+                if self._process is not None and self._process.poll() is not None:
+                    restart_model = self._current_model
+                    self._process = None
+            if restart_model:
+                try:
+                    self.start(restart_model)
+                except Exception:
+                    pass
+
+    def start_monitor(self) -> None:
+        if not self._monitor.is_alive():
+            self._monitor.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self.stop()
+
+
+supervisor = EngineSupervisor()
+app = FastAPI(title="AI Engine Manager")
+
+
+@app.on_event("startup")
+def startup() -> None:
+    supervisor.start()
+    supervisor.start_monitor()
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    supervisor.shutdown()
+
+
+@app.get("/")
+def root() -> dict[str, object]:
+    return {"service": "ai-engine-manager", **supervisor.status()}
+
+
+@app.get("/health")
+def health() -> dict[str, object]:
+    return supervisor.status()
+
+
+@app.get("/engine/status")
+def engine_status() -> dict[str, object]:
+    return supervisor.status()
+
+
+@app.post("/engine/activate")
+def activate(request: ActivateRequest) -> dict[str, object]:
+    try:
+        return supervisor.start(request.model_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+EOF
+}
+
 install_wrapper() {
     cat > "$WRAPPER_PATH" <<'EOF'
 #!/usr/bin/env bash
 
 set -euo pipefail
 
-exec /usr/local/libexec/ai-engine-backend "$@"
+host="${AI_ENGINE_ADMIN_HOST:-0.0.0.0}"
+port="${AI_ENGINE_ADMIN_PORT:-18080}"
+
+exec /opt/ai-engine/venv/bin/uvicorn engine_manager:app --app-dir /opt/ai-engine --host "$host" --port "$port"
 EOF
 
     chmod 0755 "$WRAPPER_PATH"
 }
 
 artifacts_ready() {
-    [[ -x "$WRAPPER_PATH" && -x "$BACKEND_PATH" && -f "$ROADMAP_DB_PATH" && -f "$LEGO_CHARTER_PATH" && -f "$LEGO_ROADMAP_PATH" && -f "$LEGO_PROJECTIONS_PATH" ]]
+    [[ -x "$WRAPPER_PATH" && -x "$BACKEND_PATH" && -x "$MANAGER_VENV_DIR/bin/uvicorn" && -f "$MANAGER_APP_PATH" && -f "$ROADMAP_DB_PATH" && -f "$LEGO_CHARTER_PATH" && -f "$LEGO_ROADMAP_PATH" && -f "$LEGO_PROJECTIONS_PATH" ]]
 }
 
 ensure_ipv4_preferred() {
@@ -394,6 +575,7 @@ ensure_ipv4_preferred() {
 ensure_ipv4_preferred
 
 install -d -m 0755 "$AI_ENGINE_ROOT"
+install -d -m 0755 "$STATE_DIR"
 install -d -m 0755 "$AI_ENGINE_DATA_DIR"
 install -d -m 0755 "$AI_ENGINE_PROJECTS_DIR"
 install -d -m 0755 "$LEGO_PROJECT_DIR"
@@ -417,7 +599,17 @@ ensure_apt_packages \
     curl \
     ninja-build \
     pkg-config \
+    python3 \
+    python3-pip \
+    python3-venv \
     sqlite3
+
+if [[ ! -x "$MANAGER_VENV_DIR/bin/python" ]]; then
+    python3 -m venv "$MANAGER_VENV_DIR"
+fi
+
+"$MANAGER_VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
+"$MANAGER_VENV_DIR/bin/pip" install --upgrade fastapi 'uvicorn[standard]'
 
 if [[ ! -f "$BACKEND_REPO_DIR/CMakeLists.txt" ]]; then
     temp_archive="$(mktemp)"
@@ -443,5 +635,6 @@ fi
 
 seed_roadmap_database
 write_project_documents
+install_manager_app
 install_wrapper
 printf '%s\n' "$current_script_sha" > "$INSTALL_STAMP_PATH"

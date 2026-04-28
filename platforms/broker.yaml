@@ -1,0 +1,37 @@
+name: broker
+project: prod
+variant:
+  default: cpu
+  supported:
+    - cpu
+    - nvidia
+    - amd
+  select_from: host.gpu
+
+container:
+  name: broker
+  image: ubuntu:24.04
+  profiles:
+    - default
+  mounts:
+    - host: "{{ host.model_dir }}"
+      container: /models
+      readonly: false
+  env:
+    AI_BROKER_HOST: 0.0.0.0
+    AI_BROKER_PORT: "4000"
+    AI_BROKER_ENGINE_BASE_URL: http://engine:8080
+    AI_BROKER_ENGINE_ADMIN_BASE_URL: http://engine:18080
+    AI_BROKER_DEFAULT_MODEL_ALIAS: "{{ host.ai_engine_model }}"
+    AI_BROKER_DEFAULT_MODEL_PATH: "/models/{{ host.ai_engine_model }}"
+  command: >
+    /usr/local/bin/ai-broker
+
+runtime:
+  service_name: ai-broker
+  install_script: scripts/provision-broker.bash
+
+ports:
+  - host: 4000
+    container: 4000
+    bind_local_only: true

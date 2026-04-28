@@ -138,7 +138,6 @@ host:
   storage_root: /srv
   model_dir: /srv/models
   ai_engine_model: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
-  ai_engine_client_base_url: https://example.azurecontainerapps.io
 
 projects:
   - prod
@@ -153,6 +152,7 @@ project_migrations:
 
 platforms:
   - engine
+  - broker
   - presentation
   - orchestrator
   - agents
@@ -164,14 +164,12 @@ network:
 Contract:
 
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
-- `host.model_dir` is the canonical shared GGUF storage root for engine and presentation workloads in `prod`
+- `host.model_dir` is the canonical shared GGUF storage root for broker and engine workloads in `prod`
 - `host.ai_engine_model` selects the model filename mounted into the engine runtime
-- `host.ai_engine_client_base_url` selects the deployed AI Engine endpoint consumed by workflow clients
 - `projects` defines required LXD projects
 - `project_migrations` declares legacy projects to clean up after containers are moved into the current project layout
 - `platforms` defines which platform YAMLs to apply
 - `network.expose_ui` controls localhost-only versus LAN binding policy
-- `{{ env.NAME }}` may be used in platform templates for operator-supplied secrets such as API keys
 
 ### 4.3 Platform Definition Schema
 
@@ -199,9 +197,13 @@ container:
       container: /models
       readonly: true
   env:
+    AI_ENGINE_HOST: 0.0.0.0
+    AI_ENGINE_PORT: 8080
+    AI_ENGINE_ADMIN_HOST: 0.0.0.0
+    AI_ENGINE_ADMIN_PORT: 18080
     AI_ENGINE_MODEL: /models/default.gguf
   command: >
-    /usr/local/bin/ai-engine --model $AI_ENGINE_MODEL --host 0.0.0.0 --port 8080
+    /usr/local/bin/ai-engine
 
 runtime:
   service_name: ai-engine
@@ -214,6 +216,41 @@ migration:
 ports:
   - host: 8080
     container: 8080
+    bind_local_only: true
+```
+
+Example: `platforms/broker.yaml`
+
+```yaml
+name: broker
+project: prod
+
+container:
+  name: broker
+  image: ubuntu:24.04
+  profiles:
+    - default
+  mounts:
+    - host: "{{ host.model_dir }}"
+      container: /models
+      readonly: false
+  env:
+    AI_BROKER_HOST: 0.0.0.0
+    AI_BROKER_PORT: 4000
+    AI_BROKER_ENGINE_BASE_URL: http://engine:8080
+    AI_BROKER_ENGINE_ADMIN_BASE_URL: http://engine:18080
+    AI_BROKER_DEFAULT_MODEL_ALIAS: "{{ host.ai_engine_model }}"
+    AI_BROKER_DEFAULT_MODEL_PATH: "/models/{{ host.ai_engine_model }}"
+  command: >
+    /usr/local/bin/ai-broker
+
+runtime:
+  service_name: ai-broker
+  install_script: scripts/provision-broker.bash
+
+ports:
+  - host: 4000
+    container: 4000
     bind_local_only: true
 ```
 
@@ -235,12 +272,9 @@ container:
   image: images:ubuntu/24.04
   profiles:
     - default
-  mounts:
-    - host: "{{ host.model_dir }}"
-      container: /models
-      readonly: true
   env:
-    BACKEND_URL: http://engine.prod:8080
+    OPENAI_API_BASE_URL: http://broker:4000/v1
+    OPENAI_API_KEY: local-broker
   command: >
     /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
 
@@ -272,9 +306,9 @@ container:
   env:
     N8N_HOST: 0.0.0.0
     N8N_PORT: 5678
-    AI_ENGINE_CLIENT_BASE_URL: "{{ host.ai_engine_client_base_url }}"
-    AI_ENGINE_CLIENT_API_KEY: "{{ env.AI_ENGINE_CLIENT_API_KEY }}"
-    NODE_FUNCTION_ALLOW_EXTERNAL: "@bpmsoftwaresolutions/ai-engine-client"
+    OPENAI_API_BASE_URL: http://broker:4000/v1
+    OPENAI_API_KEY: local-broker
+    LLM_BROKER_BASE_URL: http://broker:4000/v1
   command: >
     /usr/local/bin/ai-orchestrator start
 
@@ -283,7 +317,7 @@ runtime:
   install_script: scripts/provision-n8n.bash
 ```
 
-The orchestrator installer provisions both `n8n` and `@bpmsoftwaresolutions/ai-engine-client` globally so n8n code nodes can import the package directly. Supply the remote API key from the operator environment when applying the inventory instead of storing it in git.
+The orchestrator runtime should consume the local broker as its default LLM endpoint. Direct engine coupling is intentionally removed from the client-facing workflow layer.
 
 Example: `platforms/agents.yaml`
 
@@ -321,6 +355,7 @@ Current canonical host URLs:
 
 | Role | Container | Service | Host port | Canonical URL |
 | --- | --- | --- | --- | --- |
+| Model API | `broker` | AI Broker | `4000` | `http://127.0.0.1:4000` |
 | Inference API | `engine` | AI Engine | `8080` | `http://127.0.0.1:8080` |
 | Web UI | `presentation` | Open WebUI | `3000` | `http://127.0.0.1:3000` |
 | Workflow UI | `orchestrator` | n8n | `5678` | `http://127.0.0.1:5678` |
@@ -330,6 +365,7 @@ Observed container bridge endpoints on the current host as of 2026-04-28:
 
 | Container | Current state | Observed container URL | Notes |
 | --- | --- | --- | --- |
+| `broker` | running | `http://10.126.64.171:4000` | Broker container created for model registry, downloads, activation, and OpenAI-compatible API access |
 | `presentation` | running | `http://10.126.64.50:3000` | Open WebUI direct container address observed from `lxc list --all-projects` |
 | `orchestrator` | running | `http://10.126.64.78:5678` | n8n direct container address observed from `lxc list --all-projects` |
 | `engine` | running | `http://10.126.64.107:8080` | AI Engine direct container address observed from `lxc list --all-projects` |

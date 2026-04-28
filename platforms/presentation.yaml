@@ -13,12 +13,9 @@ container:
   image: ubuntu:24.04
   profiles:
     - default
-  mounts:
-    - host: "{{ host.model_dir }}"
-      container: /models
-      readonly: true
   env:
-    BACKEND_URL: http://engine.prod:8080
+    OPENAI_API_BASE_URL: http://broker:4000/v1
+    OPENAI_API_KEY: local-broker
   command: >
     /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
 

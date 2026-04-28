@@ -17,9 +17,9 @@ container:
     N8N_HOST: 0.0.0.0
     N8N_PORT: "5678"
     N8N_PROTOCOL: http
-    AI_ENGINE_CLIENT_BASE_URL: "{{ host.ai_engine_client_base_url }}"
-    AI_ENGINE_CLIENT_API_KEY: "{{ env.AI_ENGINE_CLIENT_API_KEY }}"
-    NODE_FUNCTION_ALLOW_EXTERNAL: "@bpmsoftwaresolutions/ai-engine-client"
+    OPENAI_API_BASE_URL: http://broker:4000/v1
+    OPENAI_API_KEY: local-broker
+    LLM_BROKER_BASE_URL: http://broker:4000/v1
   command: >
     /usr/local/bin/ai-orchestrator start
 

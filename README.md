@@ -8,7 +8,8 @@ The previous Windows 11 and WSL-focused implementation has been archived in git 
 
 Build toward an LXD-based deployment model where the AI stack is split into separate containers by responsibility:
 
-- LLM engine container for inference runtime and model serving
+- LLM engine container for GPU-backed `llama.cpp` inference only
+- Broker container for model registry, Hugging Face downloads, active-model selection, and OpenAI-compatible API access
 - Web inference container for browser-based interaction
 - Agent container for editor and automation-facing workflows
 
@@ -17,7 +18,7 @@ The intended direction is to keep these services loosely coupled, inventory-driv
 Current naming contract:
 
 - projects represent environments; today the inventory targets only `prod`
-- platform and container names represent service roles: `engine`, `presentation`, `orchestrator`, `agents`
+- platform and container names represent service roles: `engine`, `broker`, `presentation`, `orchestrator`, `agents`
 
 Operationally, the end-state should feel like one command from a fresh host, while still being implemented as modular scripts underneath:
 
@@ -79,29 +80,29 @@ The current prod endpoint inventory, including canonical host URLs and observed 
 
 Current local service URLs:
 
+- Broker API: `http://127.0.0.1:4000`
 - Open WebUI: `http://127.0.0.1:3000`
 - n8n: `http://127.0.0.1:5678`
 - AI Engine: `http://127.0.0.1:8080`
 - Agents: `http://127.0.0.1:7788`
 
-Known-good validation snapshot as of 2026-04-28:
+Current architecture direction as of 2026-04-28:
 
-- `presentation` verified working through Open WebUI on `http://127.0.0.1:3000`
-- `orchestrator` verified working through n8n on `http://127.0.0.1:5678`
-- `engine` verified working through the AI Engine endpoint on `http://127.0.0.1:8080`
-- `agents` remains part of the declared architecture, but is not part of the current three-component known-good baseline
-
-The `orchestrator` runtime now installs `@bpmsoftwaresolutions/ai-engine-client` so n8n code nodes can call the deployed AI Engine directly. Keep the base URL in inventory and pass the API key at apply time, for example `AI_ENGINE_CLIENT_API_KEY=... ./apply.bash inventory/alienware-m17r2.yaml`.
+- `engine` owns raw inference only and no longer owns model downloads or client-facing API responsibilities
+- `broker` owns model downloads, registry, active-model switching, and the OpenAI-compatible front door for local clients
+- `presentation` and `orchestrator` are intended to talk to `broker`, not directly to `engine`
 
 Seed files included now:
 
 - `bootstrap/arch-cachyos.bash`
 - `inventory/alienware-m17r2.yaml`
 - `platforms/engine.yaml`
+- `platforms/broker.yaml`
 - `platforms/presentation.yaml`
 - `platforms/orchestrator.yaml`
 - `platforms/agents.yaml`
 - `scripts/provision-ai-engine.bash`
+- `scripts/provision-broker.bash`
 - `scripts/provision-openwebui.bash`
 - `scripts/provision-n8n.bash`
 - `scripts/provision-crewai.bash`
@@ -111,6 +112,75 @@ Seed files included now:
 - `apply.bash`
 
 `apply.bash` is the main operator entrypoint. In apply mode it can bootstrap an Arch/CachyOS host into a usable LXD baseline before reconciling the declared container state.
+
+## Broker Operator Workflow
+
+Use the broker as the only operator-facing model control plane.
+
+List the models currently known to the broker:
+
+```bash
+curl -fsS http://127.0.0.1:4000/v1/models | jq
+```
+
+Register a model file that already exists under `/srv/models`:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:4000/admin/models/register \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"alias": "deepseek-local",
+		"path": "/models/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+		"source": "manual"
+	}' | jq
+```
+
+Download a model through the broker from Hugging Face into `/srv/models`:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:4000/admin/models/download \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"alias": "qwen-2.5-7b-instruct-q4",
+		"repo_id": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+		"filename": "qwen2.5-7b-instruct-q4_k_m.gguf"
+	}' | jq
+```
+
+If the repository requires authentication, include a token in the same payload:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:4000/admin/models/download \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"alias": "private-model",
+		"repo_id": "org/private-gguf-repo",
+		"filename": "model.gguf",
+		"token": "hf_xxx"
+	}' | jq
+```
+
+Activate a registered alias so the broker switches the engine to that model:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:4000/admin/models/activate \
+	-H 'Content-Type: application/json' \
+	-d '{"alias": "deepseek-local"}' | jq
+```
+
+Verify the active alias and the engine status after activation:
+
+```bash
+curl -fsS http://127.0.0.1:4000/health | jq
+lxc exec broker --project prod -- sh -lc 'curl -fsS http://engine:18080/engine/status' | jq
+```
+
+Point OpenAI-compatible local clients at the broker endpoint:
+
+```text
+OPENAI_API_BASE_URL=http://127.0.0.1:4000/v1
+OPENAI_API_KEY=local-broker
+```
 
 ## Archived Legacy State
 

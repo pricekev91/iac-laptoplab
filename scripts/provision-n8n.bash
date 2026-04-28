@@ -7,7 +7,6 @@ export DEBIAN_FRONTEND=noninteractive
 N8N_ROOT="/opt/n8n"
 WRAPPER_PATH="/usr/local/bin/ai-orchestrator"
 INSTALL_STAMP_PATH="${N8N_ROOT}/.install-script.sha256"
-AI_ENGINE_CLIENT_PACKAGE="@bpmsoftwaresolutions/ai-engine-client"
 
 script_sha256() {
     sha256sum "$0" | awk '{ print $1 }'
@@ -35,10 +34,6 @@ ensure_apt_packages() {
     apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends "${missing_packages[@]}"
 }
 
-npm_global_package_installed() {
-    npm list -g --depth=0 "$1" >/dev/null 2>&1
-}
-
 install_wrapper() {
     cat > "$WRAPPER_PATH" <<'EOF'
 #!/usr/bin/env bash
@@ -52,7 +47,7 @@ EOF
 }
 
 artifacts_ready() {
-    [[ -x /usr/bin/n8n && -x "$WRAPPER_PATH" ]] && npm_global_package_installed "$AI_ENGINE_CLIENT_PACKAGE"
+    [[ -x /usr/bin/n8n && -x "$WRAPPER_PATH" ]]
 }
 
 ensure_ipv4_preferred() {
@@ -93,10 +88,6 @@ ensure_apt_packages nodejs
 
 if ! command -v n8n >/dev/null 2>&1; then
     npm install -g n8n
-fi
-
-if ! npm_global_package_installed "$AI_ENGINE_CLIENT_PACKAGE"; then
-    npm install -g "$AI_ENGINE_CLIENT_PACKAGE"
 fi
 
 install_wrapper

@@ -19,9 +19,13 @@ container:
       container: /models
       readonly: true
   env:
+    AI_ENGINE_HOST: 0.0.0.0
+    AI_ENGINE_PORT: "8080"
+    AI_ENGINE_ADMIN_HOST: 0.0.0.0
+    AI_ENGINE_ADMIN_PORT: "18080"
     AI_ENGINE_MODEL: /models/{{ host.ai_engine_model }}
   command: >
-    /usr/local/bin/ai-engine --model $AI_ENGINE_MODEL --host 0.0.0.0 --port 8080
+    /usr/local/bin/ai-engine
 
 runtime:
   service_name: ai-engine
