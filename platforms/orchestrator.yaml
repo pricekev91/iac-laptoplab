@@ -17,9 +17,9 @@ container:
     N8N_HOST: 0.0.0.0
     N8N_PORT: "5678"
     N8N_PROTOCOL: http
-    OPENAI_API_BASE_URL: http://broker:4000/v1
-    OPENAI_API_KEY: local-broker
-    LLM_BROKER_BASE_URL: http://broker:4000/v1
+    OPENAI_API_BASE_URL: http://engine:8080/v1
+    OPENAI_API_KEY: local-engine
+    LLM_BASE_URL: http://engine:8080/v1
   command: >
     /usr/local/bin/ai-orchestrator start
 

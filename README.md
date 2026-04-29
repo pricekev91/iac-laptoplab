@@ -8,9 +8,8 @@ The previous Windows 11 and WSL-focused implementation has been archived in git 
 
 Build toward an LXD-based deployment model where the AI stack is split into separate containers by responsibility:
 
-- LLM engine container for GPU-backed `llama.cpp` inference only
-- Broker container for model registry, Hugging Face downloads, active-model selection, and OpenAI-compatible API access
-- Web inference container for browser-based interaction
+- LLM engine container for GPU-backed `llama.cpp` inference, API serving, and built-in WebUI access
+- Orchestrator container for workflow automation
 - Agent container for editor and automation-facing workflows
 
 The intended direction is to keep these services loosely coupled, inventory-driven, and replaceable independently during rollout.
@@ -18,7 +17,7 @@ The intended direction is to keep these services loosely coupled, inventory-driv
 Current naming contract:
 
 - projects represent environments; today the inventory targets only `prod`
-- platform and container names represent service roles: `engine`, `broker`, `presentation`, `orchestrator`, `agents`
+- platform and container names represent service roles: `engine`, `orchestrator`, `agents`
 
 Operationally, the end-state should feel like one command from a fresh host, while still being implemented as modular scripts underneath:
 
@@ -36,7 +35,7 @@ Idempotency is a design requirement for both layers:
 
 - Linux host bootstrap for Arch-family and Debian-family systems
 - LXD projects with a single active `prod` environment and optional future expansion
-- Declarative platform definitions for engine, presentation, orchestrator, and agent services
+- Declarative platform definitions for engine, orchestrator, and agent services
 - Inventory-driven provisioning with deterministic, auditable state
 - Idempotent bootstrap and apply behavior as a first-class requirement
 - Offline-first operation, with explicit handling for mirrored artifacts and model storage
@@ -80,30 +79,29 @@ The current prod endpoint inventory, including canonical host URLs and observed 
 
 Current local service URLs:
 
-- Broker API: `http://127.0.0.1:4000`
-- Open WebUI: `http://127.0.0.1:3000`
+- Open WebUI: `http://127.0.0.1:3000` when the engine backend is `ollama`
+- AI Engine appliance UI and API: `http://127.0.0.1:8080`
 - n8n: `http://127.0.0.1:5678`
-- AI Engine: `http://127.0.0.1:8080`
 - Agents: `http://127.0.0.1:7788`
 
-Current architecture direction as of 2026-04-28:
+Current architecture direction as of 2026-04-29:
 
-- `engine` owns raw inference only and no longer owns model downloads or client-facing API responsibilities
-- `broker` owns model downloads, registry, active-model switching, and the OpenAI-compatible front door for local clients
-- `presentation` and `orchestrator` are intended to talk to `broker`, not directly to `engine`
+- `engine` is the primary local AI appliance surface and can be reconciled as either `llama.cpp` or `ollama` behind the same container and host port contract
+- when the selected engine backend is `ollama`, apply also reconciles a separate `presentation` container running Open WebUI on host port `3000`
+- `orchestrator` talks directly to the engine OpenAI-compatible endpoint
+- `agents` remains a separate automation-facing service
 
 Seed files included now:
 
 - `bootstrap/arch-cachyos.bash`
 - `inventory/alienware-m17r2.yaml`
 - `platforms/engine.yaml`
-- `platforms/broker.yaml`
 - `platforms/presentation.yaml`
 - `platforms/orchestrator.yaml`
 - `platforms/agents.yaml`
 - `scripts/provision-ai-engine.bash`
-- `scripts/provision-broker.bash`
 - `scripts/provision-openwebui.bash`
+- `scripts/provision-ollama.bash`
 - `scripts/provision-n8n.bash`
 - `scripts/provision-crewai.bash`
 - `profiles/gpu-nvidia.yaml`
@@ -113,73 +111,48 @@ Seed files included now:
 
 `apply.bash` is the main operator entrypoint. In apply mode it can bootstrap an Arch/CachyOS host into a usable LXD baseline before reconciling the declared container state.
 
-## Broker Operator Workflow
+Current operator commands:
 
-Use the broker as the only operator-facing model control plane.
+- `./apply.bash` prints the currently detected engine backend for `prod/engine` and the supported engine options.
+- `./apply.bash inventory/<host>.yaml llama-cpp` reconciles the engine container as the `llama.cpp` appliance backend.
+- `./apply.bash inventory/<host>.yaml ollama` reconciles the engine container as the `ollama` appliance backend and restores the `presentation` Open WebUI layer on host port `3000`.
+- switching the requested engine backend replaces `prod/engine` so the runtime stays consistent instead of mutating in place.
 
-List the models currently known to the broker:
+## Engine Operator Workflow
 
-```bash
-curl -fsS http://127.0.0.1:4000/v1/models | jq
-```
+Use the engine as the main operator-facing API and UI surface.
 
-Register a model file that already exists under `/srv/models`:
-
-```bash
-curl -fsS -X POST http://127.0.0.1:4000/admin/models/register \
-	-H 'Content-Type: application/json' \
-	-d '{
-		"alias": "deepseek-local",
-		"path": "/models/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
-		"source": "manual"
-	}' | jq
-```
-
-Download a model through the broker from Hugging Face into `/srv/models`:
+List the currently loaded model metadata through the appliance API:
 
 ```bash
-curl -fsS -X POST http://127.0.0.1:4000/admin/models/download \
-	-H 'Content-Type: application/json' \
-	-d '{
-		"alias": "qwen-2.5-7b-instruct-q4",
-		"repo_id": "Qwen/Qwen2.5-7B-Instruct-GGUF",
-		"filename": "qwen2.5-7b-instruct-q4_k_m.gguf"
-	}' | jq
+curl -fsS http://127.0.0.1:8080/v1/models | jq
 ```
 
-If the repository requires authentication, include a token in the same payload:
-
-```bash
-curl -fsS -X POST http://127.0.0.1:4000/admin/models/download \
-	-H 'Content-Type: application/json' \
-	-d '{
-		"alias": "private-model",
-		"repo_id": "org/private-gguf-repo",
-		"filename": "model.gguf",
-		"token": "hf_xxx"
-	}' | jq
-```
-
-Activate a registered alias so the broker switches the engine to that model:
-
-```bash
-curl -fsS -X POST http://127.0.0.1:4000/admin/models/activate \
-	-H 'Content-Type: application/json' \
-	-d '{"alias": "deepseek-local"}' | jq
-```
-
-Verify the active alias and the engine status after activation:
-
-```bash
-curl -fsS http://127.0.0.1:4000/health | jq
-lxc exec broker --project prod -- sh -lc 'curl -fsS http://engine:18080/engine/status' | jq
-```
-
-Point OpenAI-compatible local clients at the broker endpoint:
+Open the engine UI in a browser:
 
 ```text
-OPENAI_API_BASE_URL=http://127.0.0.1:4000/v1
-OPENAI_API_KEY=local-broker
+http://127.0.0.1:8080
+```
+
+Check the engine health endpoint:
+
+```bash
+curl -fsS http://127.0.0.1:8080/health | jq
+```
+
+Check the local engine manager status endpoint:
+
+```bash
+curl -fsS http://127.0.0.1:18080/engine/status | jq
+```
+
+When the engine backend is `ollama`, apply provisions `qwen2.5-coder:7b` as the default pulled model unless you change `OLLAMA_DEFAULT_MODEL` in the engine platform definition.
+
+Point OpenAI-compatible local clients at the engine endpoint:
+
+```text
+OPENAI_API_BASE_URL=http://127.0.0.1:8080/v1
+OPENAI_API_KEY=local-engine
 ```
 
 ## Archived Legacy State

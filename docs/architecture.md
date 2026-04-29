@@ -86,11 +86,12 @@ Each host runs:
 - `n8n` for orchestration workflows
 - Additional VLM or multimodal runtimes later after architecture review
 - GGUF model format today
-- Shared host model directory mounted read-only into the engine and presentation containers
+- Shared host model directory mounted read-only into the engine and presentation containers when the selected backend needs it
 
 ### 3.4 UI Stack
 
-- Web-based UI such as Open WebUI
+- The built-in `llama.cpp` WebUI served by the engine container
+- Open WebUI in a separate `presentation` container when the selected backend is `ollama`
 - Editor integrations via HTTP API
 
 ### 3.5 IaC Stack
@@ -152,8 +153,6 @@ project_migrations:
 
 platforms:
   - engine
-  - broker
-  - presentation
   - orchestrator
   - agents
 
@@ -164,8 +163,10 @@ network:
 Contract:
 
 - `host.*` drives bootstrap selection, package logic, and GPU profile mapping
-- `host.model_dir` is the canonical shared GGUF storage root for broker and engine workloads in `prod`
+- `host.model_dir` is the canonical shared GGUF storage root for the engine workload in `prod`
 - `host.ai_engine_model` selects the model filename mounted into the engine runtime
+- `./apply.bash inventory/<host>.yaml <llama-cpp|ollama>` selects which engine backend is reconciled into `prod/engine`
+- selecting `ollama` also injects the `presentation` platform so Open WebUI is reconciled alongside the engine
 - `projects` defines required LXD projects
 - `project_migrations` declares legacy projects to clean up after containers are moved into the current project layout
 - `platforms` defines which platform YAMLs to apply
@@ -202,12 +203,16 @@ container:
     AI_ENGINE_ADMIN_HOST: 0.0.0.0
     AI_ENGINE_ADMIN_PORT: 18080
     AI_ENGINE_MODEL: /models/default.gguf
+    OLLAMA_DEFAULT_MODEL: qwen2.5-coder:7b
   command: >
     /usr/local/bin/ai-engine
 
 runtime:
   service_name: ai-engine
   install_script: scripts/provision-ai-engine.bash
+  install_script_by_backend:
+    llama-cpp: scripts/provision-ai-engine.bash
+    ollama: scripts/provision-ollama.bash
 
 migration:
   legacy_project: ai-infra
@@ -216,79 +221,6 @@ migration:
 ports:
   - host: 8080
     container: 8080
-    bind_local_only: true
-```
-
-Example: `platforms/broker.yaml`
-
-```yaml
-name: broker
-project: prod
-
-container:
-  name: broker
-  image: ubuntu:24.04
-  profiles:
-    - default
-  mounts:
-    - host: "{{ host.model_dir }}"
-      container: /models
-      readonly: false
-  env:
-    AI_BROKER_HOST: 0.0.0.0
-    AI_BROKER_PORT: 4000
-    AI_BROKER_ENGINE_BASE_URL: http://engine:8080
-    AI_BROKER_ENGINE_ADMIN_BASE_URL: http://engine:18080
-    AI_BROKER_DEFAULT_MODEL_ALIAS: "{{ host.ai_engine_model }}"
-    AI_BROKER_DEFAULT_MODEL_PATH: "/models/{{ host.ai_engine_model }}"
-  command: >
-    /usr/local/bin/ai-broker
-
-runtime:
-  service_name: ai-broker
-  install_script: scripts/provision-broker.bash
-
-ports:
-  - host: 4000
-    container: 4000
-    bind_local_only: true
-```
-
-Example: `platforms/presentation.yaml`
-
-```yaml
-name: presentation
-project: prod
-variant:
-  default: cpu
-  supported:
-    - cpu
-    - nvidia
-    - amd
-  select_from: host.gpu
-
-container:
-  name: presentation
-  image: images:ubuntu/24.04
-  profiles:
-    - default
-  env:
-    OPENAI_API_BASE_URL: http://broker:4000/v1
-    OPENAI_API_KEY: local-broker
-  command: >
-    /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
-
-runtime:
-  service_name: ai-presentation
-  install_script: scripts/provision-openwebui.bash
-
-migration:
-  legacy_project: dev
-  legacy_container_name: openwebui
-
-ports:
-  - host: 3000
-    container: 3000
     bind_local_only: true
 ```
 
@@ -306,9 +238,9 @@ container:
   env:
     N8N_HOST: 0.0.0.0
     N8N_PORT: 5678
-    OPENAI_API_BASE_URL: http://broker:4000/v1
-    OPENAI_API_KEY: local-broker
-    LLM_BROKER_BASE_URL: http://broker:4000/v1
+    OPENAI_API_BASE_URL: http://engine:8080/v1
+    OPENAI_API_KEY: local-engine
+    LLM_BASE_URL: http://engine:8080/v1
   command: >
     /usr/local/bin/ai-orchestrator start
 
@@ -317,7 +249,44 @@ runtime:
   install_script: scripts/provision-n8n.bash
 ```
 
-The orchestrator runtime should consume the local broker as its default LLM endpoint. Direct engine coupling is intentionally removed from the client-facing workflow layer.
+The orchestrator runtime consumes the local engine endpoint directly.
+
+Example: `platforms/presentation.yaml`
+
+```yaml
+name: presentation
+project: prod
+
+container:
+  name: presentation
+  image: ubuntu:24.04
+  profiles:
+    - default
+  mounts:
+    - host: "{{ host.model_dir }}"
+      container: /models
+      readonly: true
+  env:
+    OLLAMA_BASE_URL: http://engine:8080
+    AI_PRESENTATION_HOST: 0.0.0.0
+    AI_PRESENTATION_PORT: "3000"
+    WEBUI_AUTH: "False"
+  command: >
+    /usr/local/bin/ai-presentation serve --host ${AI_PRESENTATION_HOST:-0.0.0.0} --port ${AI_PRESENTATION_PORT:-3000}
+
+runtime:
+  service_name: ai-presentation
+  install_script: scripts/provision-openwebui.bash
+
+migration:
+  legacy_project: dev
+  legacy_container_name: openwebui
+
+ports:
+  - host: 3000
+    container: 3000
+    bind_local_only: true
+```
 
 Example: `platforms/agents.yaml`
 
@@ -355,9 +324,8 @@ Current canonical host URLs:
 
 | Role | Container | Service | Host port | Canonical URL |
 | --- | --- | --- | --- | --- |
-| Model API | `broker` | AI Broker | `4000` | `http://127.0.0.1:4000` |
-| Inference API | `engine` | AI Engine | `8080` | `http://127.0.0.1:8080` |
-| Web UI | `presentation` | Open WebUI | `3000` | `http://127.0.0.1:3000` |
+| AI UI and API | `engine` | llama.cpp server | `8080` | `http://127.0.0.1:8080` |
+| Web UI | `presentation` | Open WebUI | `3000` | `http://127.0.0.1:3000` when the backend is `ollama` |
 | Workflow UI | `orchestrator` | n8n | `5678` | `http://127.0.0.1:5678` |
 | Agent API | `agents` | CrewAI / FastAPI | `7788` | `http://127.0.0.1:7788` |
 
@@ -365,10 +333,9 @@ Observed container bridge endpoints on the current host as of 2026-04-28:
 
 | Container | Current state | Observed container URL | Notes |
 | --- | --- | --- | --- |
-| `broker` | running | `http://10.126.64.171:4000` | Broker container created for model registry, downloads, activation, and OpenAI-compatible API access |
-| `presentation` | running | `http://10.126.64.50:3000` | Open WebUI direct container address observed from `lxc list --all-projects` |
+| `engine` | running | `http://10.126.64.107:8080` | llama.cpp direct container address observed from `lxc list --all-projects`; serves both API and built-in WebUI |
+| `presentation` | conditional | `http://127.0.0.1:3000` | Open WebUI is reconciled as a separate container when the selected backend is `ollama` |
 | `orchestrator` | running | `http://10.126.64.78:5678` | n8n direct container address observed from `lxc list --all-projects` |
-| `engine` | running | `http://10.126.64.107:8080` | AI Engine direct container address observed from `lxc list --all-projects` |
 | `agents` | running | unavailable | The container is running and the host proxy URL `http://127.0.0.1:7788` responds successfully, but `lxc list --all-projects` is not currently reporting a bridge IPv4 address |
 
 Use the host URLs above in operator-facing documentation because container bridge IPs are runtime details and may change after rebuild, restart, or migration.
@@ -432,7 +399,7 @@ Properties:
 2. Clone repo.
 3. Run host bootstrap script.
 4. Log out and back in if required by group or driver changes.
-5. Run `./apply.bash inventory/<host>.yaml`.
+5. Run `./apply.bash inventory/<host>.yaml <llama-cpp|ollama>`.
 
 ### 5.2 Build Flow
 
@@ -443,7 +410,7 @@ Properties:
 
 ### 5.2.1 Idempotent Rerun Contract
 
-The operator contract is that a normal rerun of `./apply.bash inventory/<host>.yaml` should converge quickly when nothing material has changed.
+The operator contract is that a normal rerun of `./apply.bash inventory/<host>.yaml <llama-cpp|ollama>` should converge quickly when nothing material has changed.
 
 Required behavior:
 

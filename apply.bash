@@ -8,16 +8,76 @@ SNAPSHOT_PREFIX="preapply"
 ORIGINAL_ARGS=("$@")
 LXD_SUBID_HOST_START="1000000"
 LXD_SUBID_RANGE="1000000000"
+DEFAULT_ENGINE_BACKEND="llama-cpp"
+SUPPORTED_ENGINE_BACKENDS=("llama-cpp" "ollama")
+
+print_engine_options() {
+    local backend
+
+    for backend in "${SUPPORTED_ENGINE_BACKENDS[@]}"; do
+        printf '  - %s\n' "$backend"
+    done
+}
+
+valid_engine_backend() {
+    local candidate="$1"
+    local backend
+
+    for backend in "${SUPPORTED_ENGINE_BACKENDS[@]}"; do
+        if [[ "$backend" == "$candidate" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+detect_current_engine_backend() {
+    local project="prod"
+    local name="engine"
+    local backend
+    local model_env
+
+    if ! command -v lxc >/dev/null 2>&1; then
+        printf 'unknown\n'
+        return 0
+    fi
+
+    if ! lxc info "$name" --project "$project" >/dev/null 2>&1; then
+        printf 'none\n'
+        return 0
+    fi
+
+    backend="$(lxc config get "$name" user.iac.engine_backend --project "$project" 2>/dev/null || true)"
+    if valid_engine_backend "$backend"; then
+        printf '%s\n' "$backend"
+        return 0
+    fi
+
+    model_env="$(lxc config get "$name" environment.AI_ENGINE_MODEL --project "$project" 2>/dev/null || true)"
+    if [[ -n "$model_env" ]]; then
+        printf 'llama-cpp\n'
+        return 0
+    fi
+
+    printf 'unknown\n'
+}
 
 usage() {
     cat <<'EOF'
 Usage:
   ./apply.bash inventory/<host>.yaml
+  ./apply.bash inventory/<host>.yaml <llama-cpp|ollama>
   ./apply.bash --plan inventory/<host>.yaml
+  ./apply.bash --plan inventory/<host>.yaml <llama-cpp|ollama>
 
 Modes:
   --plan   Validate inventory and print the reconciliation plan without executing LXD changes.
 EOF
+
+    printf '\nCurrent engine: %s\n' "$(detect_current_engine_backend)"
+    printf 'Engine options:\n'
+    print_engine_options
 }
 
 fail() {
@@ -777,8 +837,9 @@ PY
 
 parse_state() {
     local inventory_path="$1"
+    local engine_backend="$2"
 
-    python3 - "$inventory_path" "$SCRIPT_DIR" <<'PY'
+    python3 - "$inventory_path" "$SCRIPT_DIR" "$engine_backend" <<'PY'
 import json
 import os
 import pathlib
@@ -787,6 +848,12 @@ import sys
 
 inventory_path = pathlib.Path(sys.argv[1]).resolve()
 repo_root = pathlib.Path(sys.argv[2]).resolve()
+engine_backend = sys.argv[3]
+
+SUPPORTED_ENGINE_BACKENDS = {'llama-cpp', 'ollama'}
+
+if engine_backend not in SUPPORTED_ENGINE_BACKENDS:
+    fail(f'Unsupported engine backend: {engine_backend}')
 
 def fail(message):
     print(message, file=sys.stderr)
@@ -928,6 +995,13 @@ project_migrations = inventory.get('project_migrations', [])
 platform_names = inventory.get('platforms', [])
 network = inventory.get('network', {})
 
+if engine_backend == 'ollama' and 'presentation' not in platform_names:
+    if 'engine' in platform_names:
+        engine_index = platform_names.index('engine')
+        platform_names = platform_names[:engine_index + 1] + ['presentation'] + platform_names[engine_index + 1:]
+    else:
+        platform_names = ['presentation'] + platform_names
+
 required_host_keys = ['id', 'os', 'gpu', 'model_dir', 'ai_engine_model']
 for key in required_host_keys:
     if key not in host:
@@ -996,12 +1070,17 @@ for platform_name in platform_names:
 
     install_script = runtime.get('install_script')
     service_name = runtime.get('service_name', platform['name'])
+    if platform_name == 'engine':
+        install_script = runtime.get('install_script_by_backend', {}).get(engine_backend, install_script)
     if not install_script:
         fail(f'Platform runtime.install_script is required: {platform_name}')
 
     resolved_env = {}
     for key, value in env.items():
         resolved_env[key] = render_template(value, host)
+
+    if platform_name == 'engine':
+        resolved_env['AI_ENGINE_BACKEND'] = engine_backend
 
     resolved_command = render_template(container['command'], host)
 
@@ -1023,6 +1102,7 @@ for platform_name in platform_names:
         'ports': resolved_ports,
         'runtime_install_script': str(install_script_path),
         'runtime_service_name': service_name,
+        'engine_backend': engine_backend if platform_name == 'engine' else '',
     })
 
 state = {
@@ -1039,24 +1119,41 @@ print(json.dumps(state))
 PY
 }
 
+engine_backend="$DEFAULT_ENGINE_BACKEND"
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+case "$1" in
+    --help|-h|help)
+        usage
+        exit 0
+        ;;
+    --plan)
+        MODE="plan"
+        shift
+        ;;
+esac
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
     exit 1
 fi
 
+inventory_file="$1"
 if [[ $# -eq 2 ]]; then
-    [[ "$1" == "--plan" ]] || fail "Unknown option: $1"
-    MODE="plan"
-    inventory_file="$2"
-else
-    inventory_file="$1"
+    engine_backend="$2"
 fi
+
+valid_engine_backend "$engine_backend" || fail "Unsupported engine backend: $engine_backend"
 
 [[ -f "$inventory_file" ]] || fail "Inventory file not found: $inventory_file"
 require_command python3
 require_command sha256sum
 
-state_json="$(parse_state "$inventory_file")"
+state_json="$(parse_state "$inventory_file" "$engine_backend")"
 
 eval "$(python3 - <<'PY' "$state_json"
 import json
@@ -1072,6 +1169,7 @@ emit('HOST_ID', state['host']['id'])
 emit('HOST_OS', state['host']['os'])
 emit('GPU_PROFILE', state['gpu_profile'])
 emit('GPU_PROFILE_FILE', state['gpu_profile_file'])
+emit('ENGINE_BACKEND', next((platform['engine_backend'] for platform in state['platforms'] if platform['name'] == 'engine'), ''))
 emit('PROJECT_COUNT', len(state['projects']))
 emit('PROJECT_MIGRATION_COUNT', len(state['project_migrations']))
 emit('PLATFORM_COUNT', len(state['platforms']))
@@ -1093,6 +1191,7 @@ for index, platform in enumerate(state['platforms']):
     emit(f'PLATFORM_{index}_COMMAND', platform['command'])
     emit(f'PLATFORM_{index}_RUNTIME_INSTALL_SCRIPT', platform['runtime_install_script'])
     emit(f'PLATFORM_{index}_RUNTIME_SERVICE_NAME', platform['runtime_service_name'])
+    emit(f'PLATFORM_{index}_ENGINE_BACKEND', platform['engine_backend'])
     emit(f'PLATFORM_{index}_PROFILE_COUNT', len(platform['profiles']))
     emit(f'PLATFORM_{index}_MOUNT_COUNT', len(platform['mounts']))
     emit(f'PLATFORM_{index}_ENV_COUNT', len(platform['env']))
@@ -1120,6 +1219,7 @@ PY
 log "Host: $HOST_ID"
 log "Mode: $MODE"
 log "Resolved GPU profile: $GPU_PROFILE"
+log "Requested engine backend: ${ENGINE_BACKEND:-$engine_backend}"
 
 if [[ "$MODE" == "apply" ]]; then
     ensure_host_bootstrapped "$HOST_OS"
@@ -1161,6 +1261,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     command_var="PLATFORM_${i}_COMMAND"
     runtime_install_script_var="PLATFORM_${i}_RUNTIME_INSTALL_SCRIPT"
     runtime_service_name_var="PLATFORM_${i}_RUNTIME_SERVICE_NAME"
+    engine_backend_var="PLATFORM_${i}_ENGINE_BACKEND"
     profile_count_var="PLATFORM_${i}_PROFILE_COUNT"
     mount_count_var="PLATFORM_${i}_MOUNT_COUNT"
     env_count_var="PLATFORM_${i}_ENV_COUNT"
@@ -1176,6 +1277,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     command_value="${!command_var}"
     runtime_install_script="${!runtime_install_script_var}"
     runtime_service_name="${!runtime_service_name_var}"
+    resolved_engine_backend="${!engine_backend_var}"
     profile_count="${!profile_count_var}"
     mount_count="${!mount_count_var}"
     env_count="${!env_count_var}"
@@ -1222,6 +1324,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     runtime_hash="$(
         {
             printf 'service_name=%s\n' "$runtime_service_name"
+            printf 'engine_backend=%s\n' "$resolved_engine_backend"
             printf 'command=%s\n' "$command_value"
             printf 'install_script_hash=%s\n' "$(hash_file "$runtime_install_script")"
 
@@ -1242,6 +1345,7 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
     desired_state_hash="$(
         {
             printf 'image=%s\n' "$image_name"
+            printf 'engine_backend=%s\n' "$resolved_engine_backend"
             printf 'command=%s\n' "$command_value"
 
             for profile_name in "${profile_args[@]}"; do
@@ -1348,6 +1452,9 @@ for ((i = 0; i < PLATFORM_COUNT; i++)); do
 
     run_cmd lxc config set "$container_name" user.command "$command_value" --project "$project_name"
     run_cmd lxc config set "$container_name" user.iac.desired_state_hash "$desired_state_hash" --project "$project_name"
+    if [[ -n "$resolved_engine_backend" ]]; then
+        run_cmd lxc config set "$container_name" user.iac.engine_backend "$resolved_engine_backend" --project "$project_name"
+    fi
 
     for ((p = 0; p < port_count; p++)); do
         host_port_var="PLATFORM_${i}_PORT_${p}_HOST"

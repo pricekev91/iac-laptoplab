@@ -35,11 +35,22 @@ ensure_apt_packages() {
     apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends "${missing_packages[@]}"
 }
 
+cleanup_partial_install() {
+    rm -rf /root/.cache/pip
+
+    if [[ -d "$VENV_DIR" && ! -x "$VENV_DIR/bin/open-webui" ]]; then
+        rm -rf "$VENV_DIR"
+    fi
+}
+
 install_wrapper() {
     cat > "$WRAPPER_PATH" <<'EOF'
 #!/usr/bin/env bash
 
 set -euo pipefail
+
+export HOST="${AI_PRESENTATION_HOST:-0.0.0.0}"
+export PORT="${AI_PRESENTATION_PORT:-3000}"
 
 exec /opt/openwebui/venv/bin/open-webui "$@"
 EOF
@@ -84,13 +95,20 @@ ensure_apt_packages \
     python3-pip \
     python3-venv
 
+cleanup_partial_install
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     python3 -m venv "$VENV_DIR"
 fi
 
 if ! "$VENV_DIR/bin/pip" show open-webui >/dev/null 2>&1; then
-    "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
-    "$VENV_DIR/bin/pip" install --upgrade open-webui
+    PIP_NO_CACHE_DIR=1 "$VENV_DIR/bin/pip" install --upgrade --no-cache-dir pip setuptools wheel
+
+    if ! "$VENV_DIR/bin/pip" show torch >/dev/null 2>&1; then
+        PIP_NO_CACHE_DIR=1 "$VENV_DIR/bin/pip" install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+    fi
+
+    PIP_NO_CACHE_DIR=1 "$VENV_DIR/bin/pip" install --upgrade --no-cache-dir open-webui
 fi
 
 install_wrapper

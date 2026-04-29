@@ -13,11 +13,17 @@ container:
   image: ubuntu:24.04
   profiles:
     - default
+  mounts:
+    - host: "{{ host.model_dir }}"
+      container: /models
+      readonly: true
   env:
-    OPENAI_API_BASE_URL: http://broker:4000/v1
-    OPENAI_API_KEY: local-broker
+    OLLAMA_BASE_URL: http://engine:8080
+    AI_PRESENTATION_HOST: 0.0.0.0
+    AI_PRESENTATION_PORT: "3000"
+    WEBUI_AUTH: "False"
   command: >
-    /usr/local/bin/ai-presentation serve --host 0.0.0.0 --port 3000
+    /usr/local/bin/ai-presentation serve --host ${AI_PRESENTATION_HOST:-0.0.0.0} --port ${AI_PRESENTATION_PORT:-3000}
 
 runtime:
   service_name: ai-presentation

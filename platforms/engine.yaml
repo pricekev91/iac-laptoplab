@@ -24,12 +24,16 @@ container:
     AI_ENGINE_ADMIN_HOST: 0.0.0.0
     AI_ENGINE_ADMIN_PORT: "18080"
     AI_ENGINE_MODEL: /models/{{ host.ai_engine_model }}
+    OLLAMA_DEFAULT_MODEL: qwen2.5-coder:7b
   command: >
     /usr/local/bin/ai-engine
 
 runtime:
   service_name: ai-engine
   install_script: scripts/provision-ai-engine.bash
+  install_script_by_backend:
+    llama-cpp: scripts/provision-ai-engine.bash
+    ollama: scripts/provision-ollama.bash
 
 migration:
   legacy_project: ai-infra
@@ -38,4 +42,7 @@ migration:
 ports:
   - host: 8080
     container: 8080
+    bind_local_only: true
+  - host: 18080
+    container: 18080
     bind_local_only: true

@@ -21,8 +21,6 @@ project_migrations:
 
 platforms:
   - engine
-  - broker
-  - presentation
   - orchestrator
   - agents
 

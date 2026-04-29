@@ -50,6 +50,15 @@ artifacts_ready() {
     [[ -x /usr/bin/n8n && -x "$WRAPPER_PATH" ]]
 }
 
+cleanup_n8n_install() {
+    local npm_global_root
+
+    npm_global_root="$(npm root -g 2>/dev/null || printf '/usr/lib/node_modules')"
+
+    rm -rf "${npm_global_root}/n8n"
+    rm -f /usr/bin/n8n /usr/local/bin/n8n
+}
+
 ensure_ipv4_preferred() {
     local gai_conf="/etc/gai.conf"
     local preference_line="precedence ::ffff:0:0/96  100"
@@ -87,7 +96,8 @@ fi
 ensure_apt_packages nodejs
 
 if ! command -v n8n >/dev/null 2>&1; then
-    npm install -g n8n
+    cleanup_n8n_install
+    npm install -g n8n --force
 fi
 
 install_wrapper
