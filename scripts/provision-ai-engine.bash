@@ -22,6 +22,7 @@ LEGO_ROADMAP_PATH="${LEGO_PROJECT_DIR}/roadmap.md"
 LEGO_PROJECTIONS_PATH="${LEGO_PROJECT_DIR}/projections.md"
 INSTALL_STAMP_PATH="${AI_ENGINE_ROOT}/.install-script.sha256"
 SOURCE_URL="https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.tar.gz"
+LOCALAI_SERVICE_PATH="/etc/systemd/system/ai-engine-localai.service"
 
 script_sha256() {
     sha256sum "$0" | awk '{ print $1 }'
@@ -557,8 +558,38 @@ EOF
     chmod 0755 "$WRAPPER_PATH"
 }
 
+install_localai_service() {
+    cat > "$LOCALAI_SERVICE_PATH" <<'EOF'
+[Unit]
+Description=AI Engine LocalAI API
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ai-engine
+ExecStartPre=-/usr/bin/docker rm -f ai-engine-localai
+ExecStart=/usr/bin/docker run --rm --name ai-engine-localai \
+    -p 0.0.0.0:${AI_ENGINE_LOCALAI_PORT}:8080 \
+  -v /models:/models \
+    ${AI_ENGINE_LOCALAI_IMAGE}
+ExecStop=/usr/bin/docker stop ai-engine-localai
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable docker >/dev/null 2>&1 || true
+    systemctl start docker >/dev/null 2>&1 || true
+    systemctl enable ai-engine-localai >/dev/null 2>&1 || true
+    systemctl restart ai-engine-localai >/dev/null 2>&1 || true
+}
+
 artifacts_ready() {
-    [[ -x "$WRAPPER_PATH" && -x "$BACKEND_PATH" && -x "$MANAGER_VENV_DIR/bin/uvicorn" && -f "$MANAGER_APP_PATH" && -f "$ROADMAP_DB_PATH" && -f "$LEGO_CHARTER_PATH" && -f "$LEGO_ROADMAP_PATH" && -f "$LEGO_PROJECTIONS_PATH" ]]
+    [[ -x "$WRAPPER_PATH" && -x "$BACKEND_PATH" && -x "$MANAGER_VENV_DIR/bin/uvicorn" && -f "$MANAGER_APP_PATH" && -f "$ROADMAP_DB_PATH" && -f "$LEGO_CHARTER_PATH" && -f "$LEGO_ROADMAP_PATH" && -f "$LEGO_PROJECTIONS_PATH" && -f "$LOCALAI_SERVICE_PATH" ]]
 }
 
 ensure_ipv4_preferred() {
@@ -597,6 +628,7 @@ ensure_apt_packages \
     ca-certificates \
     cmake \
     curl \
+    docker.io \
     ninja-build \
     pkg-config \
     python3 \
@@ -637,4 +669,5 @@ seed_roadmap_database
 write_project_documents
 install_manager_app
 install_wrapper
+install_localai_service
 printf '%s\n' "$current_script_sha" > "$INSTALL_STAMP_PATH"

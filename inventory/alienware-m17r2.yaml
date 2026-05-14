@@ -21,8 +21,7 @@ project_migrations:
 
 platforms:
   - engine
-  - orchestrator
-  - agents
 
 network:
   expose_ui: false
+

@@ -21,9 +21,12 @@ container:
   env:
     AI_ENGINE_HOST: 0.0.0.0
     AI_ENGINE_PORT: "8080"
+    AI_ENGINE_LOCALAI_PORT: "8081"
+    AI_ENGINE_LLAMA_SERVER_PORT: "8082"
     AI_ENGINE_ADMIN_HOST: 0.0.0.0
     AI_ENGINE_ADMIN_PORT: "18080"
     AI_ENGINE_MODEL: /models/{{ host.ai_engine_model }}
+    AI_ENGINE_LOCALAI_IMAGE: localai/localai:latest-aio-cpu
     OLLAMA_DEFAULT_MODEL: qwen2.5-coder:7b
   command: >
     /usr/local/bin/ai-engine
@@ -31,17 +34,35 @@ container:
 runtime:
   service_name: ai-engine
   install_script: scripts/provision-ai-engine.bash
-  install_script_by_backend:
-    llama-cpp: scripts/provision-ai-engine.bash
-    ollama: scripts/provision-ollama.bash
 
-migration:
-  legacy_project: ai-infra
-  legacy_container_name: llama
+# LXD Configuration
+limits:
+  cpu: "12"
+  memory: 49152MiB
 
+devices:
+  gpu:
+    type: gpu
+  root:
+    type: disk
+    pool: default
+    path: /
+    size: 96GB
+
+# LXD doesn't have 'onboot' or 'startup' like Proxmox.
+# Containers start immediately upon creation.
+# Security nesting is enabled for tools like Docker if needed.
+security:
+  nesting: true
 ports:
   - host: 8080
     container: 8080
+    bind_local_only: true
+  - host: 8081
+    container: 8081
+    bind_local_only: true
+  - host: 8082
+    container: 8082
     bind_local_only: true
   - host: 18080
     container: 18080
