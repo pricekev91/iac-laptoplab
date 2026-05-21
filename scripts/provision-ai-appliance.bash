@@ -57,6 +57,7 @@ install_localai_backends() {
   install -d -m 0755 /srv/ai/state/localai/backends
 
   log "Ensuring LocalAI llama-cpp backend is installed"
+  LOCALAI_FORCE_META_BACKEND_CAPABILITY=nvidia \
   /usr/local/bin/local-ai backends install llama-cpp \
     --backends-path /srv/ai/state/localai/backends >/dev/null
 }
