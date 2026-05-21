@@ -82,6 +82,8 @@ AI_ENGINE_LLAMA_FLASH_ATTN=${AI_ENGINE_LLAMA_FLASH_ATTN}
 AI_ENGINE_LLAMA_NO_MMAP=${AI_ENGINE_LLAMA_NO_MMAP}
 AI_ENGINE_LLAMA_MLOCK=${AI_ENGINE_LLAMA_MLOCK}
 AI_ENGINE_LLAMA_CACHE_TYPE=${AI_ENGINE_LLAMA_CACHE_TYPE}
+AI_ENGINE_REQUIRE_NVIDIA=${AI_ENGINE_REQUIRE_NVIDIA}
+AI_ENGINE_NVIDIA_GPU_NAME=${AI_ENGINE_NVIDIA_GPU_NAME}
 EOF
 
   cat >/usr/local/bin/ai-engine-status <<'EOF'
@@ -98,6 +100,8 @@ localai_port=${AI_ENGINE_LOCALAI_PORT:-unknown}
 default_model=${AI_ENGINE_DEFAULT_MODEL:-unknown}
 default_model_url=${AI_ENGINE_DEFAULT_MODEL_URL:-unknown}
 default_model_path=${AI_ENGINE_DEFAULT_MODEL_PATH:-unknown}
+require_nvidia=${AI_ENGINE_REQUIRE_NVIDIA:-unknown}
+nvidia_gpu_name=${AI_ENGINE_NVIDIA_GPU_NAME:-unknown}
 models_dir=/srv/ai/models
 state_dir=/srv/ai/state
 scratch_dir=/srv/ai/scratch
@@ -108,15 +112,15 @@ EOF
 }
 
 write_localai_model_config() {
-  install -d -m 0755 /srv/ai/models
+  install -d -m 0755 /srv/ai/state/localai/models
 
   local model_file
   local mmproj_file
   local model_config_path
 
-  # LocalAI validates model files under models-path, so keep YAML paths relative to /srv/ai/models.
-  model_file="${AI_ENGINE_DEFAULT_MODEL_PATH#/srv/ai/models/}"
-  model_config_path="/srv/ai/models/${AI_ENGINE_DEFAULT_MODEL}.yaml"
+  # Keep model YAML in writable state path; use absolute GGUF paths for model loading.
+  model_file="${AI_ENGINE_DEFAULT_MODEL_PATH}"
+  model_config_path="/srv/ai/state/localai/models/${AI_ENGINE_DEFAULT_MODEL}.yaml"
 
   # Auto-detect mmproj: look for a gguf in the sibling mmproj/ directory relative to the model.
   # e.g. model at llama-cpp/models/Foo-GGUF/foo.gguf -> check llama-cpp/mmproj/Foo-GGUF/mmproj.gguf
@@ -192,14 +196,19 @@ set -euo pipefail
 install -d -m 0755 /srv/ai/state/localai/data /srv/ai/state/localai/backends
 export LLAMACPP_PARALLEL="${AI_ENGINE_LLAMA_PARALLEL:-1}"
 
-# For NVIDIA GPU support in LXD, export CUDA variables if GPUs are available
+# For the 2060M profile, require NVIDIA tooling and expose CUDA device selection.
+if [[ "${AI_ENGINE_REQUIRE_NVIDIA,,}" == "true" ]] && ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: NVIDIA tooling (nvidia-smi) is required but unavailable." >&2
+  exit 1
+fi
+
 if command -v nvidia-smi >/dev/null 2>&1; then
-  export CUDA_VISIBLE_DEVICES=0
+  export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 fi
 
 exec /usr/local/bin/local-ai run \
   --address "${AI_ENGINE_LOCALAI_HOST}:${AI_ENGINE_LOCALAI_PORT}" \
-  --models-path /srv/ai/models \
+  --models-path /srv/ai/state/localai/models \
   --data-path /srv/ai/state/localai/data \
   --backends-path /srv/ai/state/localai/backends \
   --threads "${AI_ENGINE_LLAMA_THREADS}" \
@@ -296,8 +305,10 @@ main() {
   export AI_ENGINE_DEFAULT_MODEL_PATH="${AI_ENGINE_DEFAULT_MODEL_PATH:-/srv/ai/models/default.gguf}"
   export AI_ENGINE_PULL_DEFAULT_MODEL="${AI_ENGINE_PULL_DEFAULT_MODEL:-true}"
   export AI_ENGINE_LLAMA_CONTEXT_SIZE="${AI_ENGINE_LLAMA_CONTEXT_SIZE:-8192}"
-  export AI_ENGINE_LLAMA_GPU_LAYERS="${AI_ENGINE_LLAMA_GPU_LAYERS:-99}"
+  export AI_ENGINE_LLAMA_GPU_LAYERS="${AI_ENGINE_LLAMA_GPU_LAYERS:-60}"
   export AI_ENGINE_LLAMA_THREADS="${AI_ENGINE_LLAMA_THREADS:-12}"
+  export AI_ENGINE_REQUIRE_NVIDIA="${AI_ENGINE_REQUIRE_NVIDIA:-true}"
+  export AI_ENGINE_NVIDIA_GPU_NAME="${AI_ENGINE_NVIDIA_GPU_NAME:-RTX 2060M}"
 
   log "Installing baseline packages"
   install_base_packages

@@ -1,28 +1,41 @@
-engine:
-  project: prod
-  name: engine
-  hostname: engine
-  image: ubuntu:24.04
-  cores: 12
-  memory_mb: 49152
-  enable_gpu: true
-  webui_port: 8080
-  localai_port: 8081
-  default_model: qwopus3.6-35b-a3b-v1
-  default_model_url: ""
-  default_model_path: /srv/ai/models/llama-cpp/models/Qwopus3.6-35B-A3B-v1-GGUF/Qwopus3.6-35B-A3B-v1-Q4_K_M.gguf
-  pull_default_model: false
-  llama_context_size: 32768
-  llama_gpu_layers: 60
-  llama_threads: 8
-  llama_batch_size: 512
-  llama_parallel: 2
-  llama_flash_attn: true
-  llama_no_mmap: false
-  llama_mlock: false
-  llama_cache_type: q4_0
+name: engine
+project: prod
 
-storage:
-  models_host_path: /srv/ai/models
-  state_host_path: /srv/ai/state
-  scratch_host_path: /srv/ai/scratch
+container:
+  name: engine
+  image: ubuntu:24.04
+  profiles:
+    - default
+    - gpu
+  mounts:
+    - host: /home/pricekev/ai/models
+      container: /srv/ai/models
+      readonly: true
+  env:
+    AI_ENGINE_WEBUI_PORT: "8080"
+    AI_ENGINE_LOCALAI_PORT: "8081"
+    AI_ENGINE_DEFAULT_MODEL: qwopus3.6-35b-a3b-v1
+    AI_ENGINE_DEFAULT_MODEL_URL: ""
+    AI_ENGINE_DEFAULT_MODEL_PATH: /srv/ai/models/llama-cpp/models/Qwopus3.6-35B-A3B-v1-GGUF/Qwopus3.6-35B-A3B-v1-Q4_K_M.gguf
+    AI_ENGINE_PULL_DEFAULT_MODEL: "false"
+    AI_ENGINE_LLAMA_CONTEXT_SIZE: "32768"
+    AI_ENGINE_LLAMA_GPU_LAYERS: "60"
+    AI_ENGINE_LLAMA_THREADS: "8"
+    AI_ENGINE_LLAMA_BATCH_SIZE: "512"
+    AI_ENGINE_LLAMA_PARALLEL: "2"
+    AI_ENGINE_LLAMA_FLASH_ATTN: "true"
+    AI_ENGINE_LLAMA_NO_MMAP: "false"
+    AI_ENGINE_LLAMA_MLOCK: "false"
+    AI_ENGINE_LLAMA_CACHE_TYPE: q4_0
+    AI_ENGINE_REQUIRE_NVIDIA: "true"
+    AI_ENGINE_NVIDIA_GPU_NAME: RTX 2060M
+  command: /usr/local/bin/ai-engine-localai-start
+
+runtime:
+  service_name: ai-engine-localai
+  install_script: scripts/provision-ai-appliance.bash
+
+ports:
+  - host: 8080
+    container: 8080
+    bind_local_only: false
