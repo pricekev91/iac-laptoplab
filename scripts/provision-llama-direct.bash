@@ -162,8 +162,8 @@ main() {
   require_root
 
   export LLAMA_MODEL_URL="${LLAMA_MODEL_URL:-}"
-  export LLAMA_MODEL_PATH="${LLAMA_MODEL_PATH:-/srv/ai/models/llama-cpp/models/qwen2.5-7b-instruct-1m-q4_k_m.gguf}"
-  export LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-90112}"
+  export LLAMA_MODEL_PATH="${LLAMA_MODEL_PATH:-/srv/ai/state/models/Ministral-3-3B-Instruct-2512-Q5_K_M.gguf}"
+  export LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-32000}"
   export LLAMA_THREADS="${LLAMA_THREADS:-4}"
   export LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-0}"
   export LLAMA_PORT="${LLAMA_PORT:-8080}"

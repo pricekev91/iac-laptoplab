@@ -12,9 +12,9 @@ container:
       container: /opt/host-lib
       readonly: true
   env:
-    LLAMA_MODEL_URL: https://huggingface.co/FullnameNameUser/Qwen2.5-7B-Instruct-1M-Q4_K_M-GGUF/resolve/main/qwen2.5-7b-instruct-1m-q4_k_m.gguf
-    LLAMA_MODEL_PATH: /srv/ai/state/models/qwen2.5-7b-instruct-1m-q4_k_m.gguf
-    LLAMA_CTX_SIZE: "90112"
+    LLAMA_MODEL_URL: https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q5_K_M.gguf
+    LLAMA_MODEL_PATH: /srv/ai/state/models/Ministral-3-3B-Instruct-2512-Q5_K_M.gguf
+    LLAMA_CTX_SIZE: "32000"
     LLAMA_THREADS: "4"
     LLAMA_GPU_LAYERS: "0"
     LLAMA_PORT: "8080"
