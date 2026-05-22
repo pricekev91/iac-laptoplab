@@ -114,7 +114,7 @@ exec /opt/llama.cpp/llama-server \
   -c "$LLAMA_CTX_SIZE" \
   -t "$LLAMA_THREADS" \
   -ngl "$LLAMA_GPU_LAYERS" \
-  --flash-attn
+  --flash-attn auto
 EOF
 
   chmod 0755 /usr/local/bin/llama-server-start
@@ -163,9 +163,9 @@ main() {
 
   export LLAMA_MODEL_URL="${LLAMA_MODEL_URL:-}"
   export LLAMA_MODEL_PATH="${LLAMA_MODEL_PATH:-/srv/ai/models/llama-cpp/models/qwen2.5-7b-instruct-1m-q4_k_m.gguf}"
-  export LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-100000}"
-  export LLAMA_THREADS="${LLAMA_THREADS:-8}"
-  export LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-60}"
+  export LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-90112}"
+  export LLAMA_THREADS="${LLAMA_THREADS:-4}"
+  export LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-0}"
   export LLAMA_PORT="${LLAMA_PORT:-8080}"
 
   install_base_packages
